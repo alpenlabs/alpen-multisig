@@ -431,3 +431,93 @@ impl GameTxs {
             .collect()
     }
 }
+
+// ── Payout transaction helpers ──────────────────────────────────────────────
+
+use crate::payout_tx::{add_signature_in, analyze, key_sighash, ChangeOutput, FeeInput};
+use bitcoin::{bip32::DerivationPath, key::TapTweak, psbt::Psbt, taproot, TapSighashType};
+
+pub fn fee_coin(fx: &Fixture, admin: usize, idx: u32, value: u64) -> FeeInput {
+    let secp = Secp256k1::new();
+    let k = fee_key(fx, admin, idx);
+    let internal = k.x_only_public_key().0;
+    FeeInput {
+        outpoint: OutPoint::new(Txid::from_byte_array([200 + idx as u8; 32]), idx),
+        txout: TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: ScriptBuf::new_p2tr(&secp, internal, None),
+        },
+        internal_key: internal,
+        fingerprint: fx.fingerprint(admin),
+        path: DerivationPath::from_str(&format!("m/86'/1'/73'/0/{idx}")).unwrap(),
+    }
+}
+
+pub fn fee_key(fx: &Fixture, admin: usize, idx: u32) -> Keypair {
+    let secp = Secp256k1::new();
+    let x = fx
+        .account_xpriv(admin)
+        .derive_priv(
+            &secp,
+            &DerivationPath::from_str(&format!("m/0/{idx}")).unwrap(),
+        )
+        .unwrap();
+    Keypair::from_secret_key(&secp, &x.private_key)
+}
+
+pub fn change(fx: &Fixture, value: u64) -> ChangeOutput {
+    let secp = Secp256k1::new();
+    let x = fx
+        .account_xpriv(0)
+        .derive_priv(&secp, &DerivationPath::from_str("m/1/0").unwrap())
+        .unwrap();
+    ChangeOutput {
+        value: Amount::from_sat(value),
+        internal_key: x.private_key.x_only_public_key(&secp).0,
+        fingerprint: fx.fingerprint(0),
+        path: DerivationPath::from_str("m/86'/1'/73'/1/0").unwrap(),
+    }
+}
+
+/// Signs every connector input as admin `admin`, the way a device does.
+pub fn sign_as(fx: &Fixture, dep: &Deployment, psbt: &mut Psbt, admin: usize) {
+    let a = analyze(dep, psbt).unwrap();
+    let kp = fx.admin_keypair(admin);
+    let secp = Secp256k1::new();
+    let mut added = std::collections::BTreeSet::new();
+    for c in &a.connector_inputs {
+        let sig = secp.sign_schnorr(&c.sighash, &kp);
+        add_signature_in(
+            dep,
+            psbt,
+            &a,
+            &mut added,
+            c.index,
+            &kp.x_only_public_key().0,
+            sig,
+        )
+        .unwrap();
+    }
+}
+
+pub fn sign_fee(fx: &Fixture, psbt: &mut Psbt, coin: &FeeInput, idx: u32) {
+    let secp = Secp256k1::new();
+    let i = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .position(|t| t.previous_output == coin.outpoint)
+        .unwrap();
+    let prevouts: Vec<_> = psbt
+        .inputs
+        .iter()
+        .map(|x| x.witness_utxo.clone().unwrap())
+        .collect();
+    let msg = key_sighash(&psbt.unsigned_tx, &prevouts, i).unwrap();
+    let tweaked = fee_key(fx, 0, idx).tap_tweak(&secp, None);
+    let sig = secp.sign_schnorr(&msg, &tweaked.to_keypair());
+    psbt.inputs[i].tap_key_sig = Some(taproot::Signature {
+        signature: sig,
+        sighash_type: TapSighashType::Default,
+    });
+}
