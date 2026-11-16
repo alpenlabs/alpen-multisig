@@ -5,9 +5,7 @@
 //! **P-028:** Do not import `strata_*` crates here. SSZ/ASM types stay in
 //! `crate::infrastructure::action_codec` and `asm_role_membership`.
 
+pub(crate) mod payout_deployment;
+pub(crate) mod payouts;
 pub(crate) mod proposals;
 pub(crate) mod traits;
-
-pub mod payout_deployment;
-
-pub mod payouts;

@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
     warn_without_txindex(btc_client.clone());
 
     let deployment = application::payout_deployment::load_payout_deployment(&config)?;
+    let mut payout_repo: Option<Arc<dyn application::payouts::PayoutRepository>> = None;
 
     let state = if let Some(database_url) = &config.database_url {
         let pool = PgPoolOptions::new()
@@ -48,13 +49,16 @@ async fn main() -> anyhow::Result<()> {
             .run(&pool)
             .await
             .context("failed to run database migrations")?;
+        payout_repo = Some(Arc::new(
+            infrastructure::payout_repo::PostgresPayoutRepository::new(pool.clone()),
+        ));
         let repo = Arc::new(infrastructure::postgres_repo::PostgresProposalRepository::new(pool));
         state::AppState::new(
             repo,
             config.strata_admin_state_rpc_url.clone(),
             config.auth_challenge_ttl_ms,
             config.auth_session_ttl_ms,
-            btc_client,
+            btc_client.clone(),
             config.proposal_expiry_days,
             config.bitcoin_network,
         )
@@ -66,15 +70,22 @@ async fn main() -> anyhow::Result<()> {
             config.strata_admin_state_rpc_url.clone(),
             config.auth_challenge_ttl_ms,
             config.auth_session_ttl_ms,
-            btc_client,
+            btc_client.clone(),
             config.proposal_expiry_days,
             config.bitcoin_network,
         )
     };
-
-    let state = state.with_payouts(
-        deployment.map(|dep| Arc::new(application::payouts::PayoutService::new(Arc::new(dep)))),
-    );
+    let payouts = deployment.map(|dep| {
+        let repo = payout_repo.unwrap_or_else(|| {
+            Arc::new(infrastructure::payout_repo::InMemoryPayoutRepository::new())
+        });
+        Arc::new(application::payouts::PayoutService::new(
+            Arc::new(dep),
+            repo,
+            btc_client.clone(),
+        ))
+    });
+    let state = state.with_payouts(payouts);
 
     let cors = CorsLayer::new()
         .allow_methods([

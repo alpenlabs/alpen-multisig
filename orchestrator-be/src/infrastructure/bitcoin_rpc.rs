@@ -1,6 +1,6 @@
-//! Bitcoin RPC client for orchestrator health checks only.
-//!
-//! On-chain broadcast executes in the desktop app (`desktop-app/src-tauri`).
+//! Bitcoin RPC client for health checks, reconciliation and payout acceptance.
+
+mod payout;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -37,6 +37,47 @@ pub(crate) trait BitcoinRpcClient: Send + Sync {
     async fn get_tx_position_in_block(&self, _txid: &str) -> Result<usize, AppError> {
         Err(AppError::BadRequest(
             "this bitcoin client cannot place a transaction in its block".to_string(),
+        ))
+    }
+
+    /// Whether `txid:vout` is an unspent output (`gettxout`), counting mempool spends only when
+    /// `include_mempool`. Used by the payout refresh.
+    async fn tx_out_unspent(
+        &self,
+        _txid: &str,
+        _vout: u32,
+        _include_mempool: bool,
+    ) -> Result<bool, AppError> {
+        Err(AppError::BadRequest(
+            "this bitcoin client cannot look up outputs".to_string(),
+        ))
+    }
+
+    /// Submit the finalized payout, or establish that the node already knows it.
+    async fn accept_payout(&self, tx: &bitcoin::Transaction) -> Result<(), AppError> {
+        if self.tx_known(&tx.compute_txid().to_string()).await? {
+            Ok(())
+        } else {
+            Err(AppError::BadRequest(
+                "payout is not known to the coordinator node".to_string(),
+            ))
+        }
+    }
+
+    /// Retrieve the witnessed payout independently of locally collected signatures.
+    async fn payout_transaction(
+        &self,
+        _txid: &str,
+    ) -> Result<Option<bitcoin::Transaction>, AppError> {
+        Err(AppError::BadRequest(
+            "this bitcoin client cannot retrieve payouts".to_string(),
+        ))
+    }
+
+    /// Whether the node knows `txid` (mempool, or a block with `-txindex`).
+    async fn tx_known(&self, _txid: &str) -> Result<bool, AppError> {
+        Err(AppError::BadRequest(
+            "this bitcoin client cannot look up transactions".to_string(),
         ))
     }
 }
@@ -247,6 +288,28 @@ impl BitcoinRpcClient for HttpBitcoinRpcClient {
             .ok_or_else(|| {
                 AppError::BadRequest(format!("getblock: tx {txid} is not in block {blockhash}"))
             })
+    }
+
+    async fn tx_out_unspent(
+        &self,
+        txid: &str,
+        vout: u32,
+        include_mempool: bool,
+    ) -> Result<bool, AppError> {
+        self.payout_out_unspent(txid, vout, include_mempool).await
+    }
+    async fn accept_payout(&self, tx: &bitcoin::Transaction) -> Result<(), AppError> {
+        self.payout_accept(tx).await
+    }
+    async fn payout_transaction(
+        &self,
+        txid: &str,
+    ) -> Result<Option<bitcoin::Transaction>, AppError> {
+        self.payout_read_transaction(txid).await
+    }
+
+    async fn tx_known(&self, txid: &str) -> Result<bool, AppError> {
+        Ok(self.payout_transaction(txid).await?.is_some())
     }
 
     async fn get_chain_tip(&self) -> Result<u64, AppError> {

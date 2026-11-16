@@ -40,6 +40,8 @@ impl FromRequestParts<AppState> for GovernanceSession {
 #[derive(Clone)]
 pub struct PayoutAdminSession {
     pub service: Arc<PayoutService>,
+    /// The admin's x-only key (hex), as in params.toml.
+    pub admin_xonly: String,
 }
 
 #[axum::async_trait]
@@ -55,6 +57,13 @@ impl FromRequestParts<AppState> for PayoutAdminSession {
         if s.authority != Authority::PayoutAdmin || !service.is_admin_pubkey(&s.signer_pubkey) {
             return Err(AppError::Unauthorized);
         }
-        Ok(Self { service })
+        let pk: bitcoin::PublicKey = s
+            .signer_pubkey
+            .parse()
+            .map_err(|_| AppError::Unauthorized)?;
+        Ok(Self {
+            service,
+            admin_xonly: bitcoin::secp256k1::XOnlyPublicKey::from(pk.inner).to_string(),
+        })
     }
 }
