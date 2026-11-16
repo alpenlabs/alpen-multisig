@@ -609,6 +609,176 @@ pub(crate) fn add_signature_in(
     Ok(true)
 }
 
+// ── Signature text ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureLine {
+    pub txid: String,
+    pub input_index: usize,
+    pub admin_key: String,
+    pub signature: String,
+}
+
+impl std::fmt::Display for SignatureLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}:{}",
+            self.txid, self.input_index, self.admin_key, self.signature
+        )
+    }
+}
+
+/// All valid admin signatures in the transaction, one line each (input order, then admin order).
+pub fn export_signatures(
+    dep: &Deployment,
+    psbt: &Psbt,
+) -> Result<Vec<SignatureLine>, PayoutTxError> {
+    let a = analyze(dep, psbt)?;
+    let mut out = Vec::new();
+    for c in &a.connector_inputs {
+        for (_, (key, _), sig) in c.signatures(dep, psbt) {
+            out.push(SignatureLine {
+                txid: a.txid.to_string(),
+                input_index: c.index,
+                admin_key: key.to_string(),
+                signature: hex::encode(sig.signature.serialize()),
+            });
+        }
+    }
+    Ok(out)
+}
+
+pub fn signatures_text(lines: &[SignatureLine]) -> String {
+    lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidSignature {
+    pub raw: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasteOutcome {
+    pub added: Vec<SignatureLine>,
+    pub already_present: usize,
+    pub invalid: Vec<InvalidSignature>,
+}
+
+/// User-facing text for invalid pasted signatures: the sentence, then the invalid ones, one per
+/// line.
+pub fn invalid_signatures_message(invalid: &[InvalidSignature]) -> Option<String> {
+    match invalid.len() {
+        0 => None,
+        1 => Some(format!(
+            "Warning: Invalid signature. Please provide a valid signature.\n{}",
+            invalid[0].raw
+        )),
+        _ => Some(format!(
+            "Warning: Invalid signatures. Please provide valid signatures.\n{}",
+            invalid
+                .iter()
+                .map(|i| i.raw.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        )),
+    }
+}
+
+fn parse_line(
+    raw: &str,
+    txid: &Txid,
+) -> Result<(usize, XOnlyPublicKey, schnorr::Signature), String> {
+    let parts: Vec<&str> = raw.split(':').collect();
+    let [t, idx, key, sig] = parts.as_slice() else {
+        return Err("expected <txid>:<input>:<admin key>:<signature>".into());
+    };
+    let t = Txid::from_str(t).map_err(|_| "malformed transaction id")?;
+    if &t != txid {
+        return Err("the signature is for a different transaction".into());
+    }
+    let idx: usize = idx.parse().map_err(|_| "malformed input index")?;
+    let key = XOnlyPublicKey::from_str(key).map_err(|_| "malformed admin key")?;
+    let bytes = hex::decode(sig).map_err(|_| "the signature is not hex")?;
+    if bytes.len() != 64 {
+        return Err("the signature must be 64 bytes (SIGHASH_DEFAULT)".into());
+    }
+    let sig = schnorr::Signature::from_slice(&bytes).map_err(|_| "malformed signature")?;
+    Ok((idx, key, sig))
+}
+
+/// Verifies every pasted signature; only valid ones are added to `psbt`.
+pub fn paste_signatures(dep: &Deployment, psbt: &mut Psbt, text: &str) -> PasteOutcome {
+    let txid = psbt.unsigned_tx.compute_txid();
+    let mut out = PasteOutcome::default();
+    let analysis = analyze(dep, psbt).map_err(|e| e.to_string());
+    let mut filled = BTreeSet::new();
+    for raw in text
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        .filter(|s| !s.is_empty())
+    {
+        let res = parse_line(raw, &txid).and_then(|(idx, key, sig)| {
+            let a = analysis.as_ref().map_err(Clone::clone)?;
+            add_signature_in(dep, psbt, a, &mut filled, idx, &key, sig)
+                .map(|added| (added, idx, key, sig))
+        });
+        match res {
+            Ok((true, idx, key, sig)) => out.added.push(SignatureLine {
+                txid: txid.to_string(),
+                input_index: idx,
+                admin_key: key.to_string(),
+                signature: hex::encode(sig.serialize()),
+            }),
+            Ok((false, ..)) => out.already_present += 1,
+            Err(reason) => out.invalid.push(InvalidSignature {
+                raw: raw.to_string(),
+                reason,
+            }),
+        }
+    }
+    out
+}
+
+/// Copies the admin signatures and fee input signatures of `other` that are valid for `base` into
+/// `base`. Both must be the same transaction.
+pub fn merge(dep: &Deployment, base: &mut Psbt, other: &Psbt) -> Result<usize, PayoutTxError> {
+    if base.unsigned_tx != other.unsigned_tx {
+        return shape("the two PSBTs are different transactions");
+    }
+    let theirs = analyze(dep, other)?;
+    let ours = analyze(dep, base)?;
+    let mut filled = BTreeSet::new();
+    let mut added = 0;
+    for c in &theirs.connector_inputs {
+        for (_, (key, _), sig) in c.signatures(dep, other) {
+            if add_signature_in(dep, base, &ours, &mut filled, c.index, &key, sig.signature)
+                == Ok(true)
+            {
+                added += 1;
+            }
+        }
+    }
+    // A fee signature counts only if it verifies against `base`'s own prevouts and key: `other`
+    // may describe the fee input differently, and its signature is then valid only there. A slot
+    // holding a signature that does not verify is free.
+    for f in ours.fee_inputs.iter().filter(|f| !f.signed) {
+        let sig = other.inputs[f.index].tap_key_sig;
+        if f.verifies(sig) {
+            base.inputs[f.index].tap_key_sig = sig;
+            added += 1;
+        }
+    }
+    Ok(added)
+}
+
 // ── Finalizing ───────────────────────────────────────────────────────────────
 
 /// Builds the final transaction: each connector witness through the bridge's own
@@ -725,6 +895,45 @@ mod tests {
 
     /// The largest planner transaction (about 90 claims) signs, merges and finalizes in seconds,
     /// not minutes: each step analyzes the transaction once, with one sighash cache.
+    #[test]
+    fn ninety_claims_sign_merge_and_finalize() {
+        use std::time::Instant;
+        let fx = Fixture::new(3, 2);
+        let dep = fx.deployment();
+        let coin = fee_coin(&fx, 0, 4, 500_000);
+        let claims: Vec<ConnectorRef> = (0..90u32)
+            .map(|i| {
+                let mut b = [0u8; 32];
+                b[..4].copy_from_slice(&i.to_le_bytes());
+                ConnectorRef {
+                    claim_txid: bitcoin::Txid::from_byte_array(b),
+                    covenant_index: 0,
+                }
+            })
+            .collect();
+        let base = build_psbt(
+            &dep,
+            &claims,
+            std::slice::from_ref(&coin),
+            &change(&fx, 300_000),
+        )
+        .unwrap();
+        let t = Instant::now();
+        let mut a0 = base.clone();
+        sign_as(&fx, &dep, &mut a0, 0);
+        println!("sign_as {:?}", t.elapsed());
+        let mut a1 = base.clone();
+        sign_as(&fx, &dep, &mut a1, 1);
+        sign_fee(&fx, &mut a1, &coin, 4);
+        let t = Instant::now();
+        let n = merge(&dep, &mut a0, &a1).unwrap();
+        println!("merge {:?}", t.elapsed());
+        assert_eq!(n, 90 + 1);
+        let t = Instant::now();
+        let tx = finalize(&dep, &a0).unwrap();
+        println!("finalize {:?}", t.elapsed());
+        assert!(tx.vsize() as u64 <= TRUC_MAX_VSIZE);
+    }
 
     #[test]
     fn build_sign_finalize() {
@@ -769,6 +978,128 @@ mod tests {
         assert_eq!(w[2].len(), 64); // admin 0
                                     // Each connector witness verifies against the script (sanity: through bitcoinconsensus is
                                     // covered by the regtest suite in the desktop crate).
+    }
+
+    #[test]
+    fn signature_lines_round_trip_and_reject_bad_ones() {
+        let fx = Fixture::new(3, 2);
+        let dep = fx.deployment();
+        let coin = fee_coin(&fx, 0, 1, 20_000);
+        let base = build_psbt(&dep, &two_claims(&fx, &dep), &[coin], &change(&fx, 19_000)).unwrap();
+        let mut signed = base.clone();
+        sign_as(&fx, &dep, &mut signed, 1);
+        let lines = export_signatures(&dep, &signed).unwrap();
+        assert_eq!(lines.len(), 2);
+        let text = signatures_text(&lines);
+
+        let mut target = base.clone();
+        let bad_sig = format!(
+            "{}:0:{}:{}",
+            lines[0].txid,
+            lines[0].admin_key,
+            "00".repeat(64)
+        );
+        let wrong_tx = format!(
+            "{}:0:{}:{}",
+            "11".repeat(32),
+            lines[0].admin_key,
+            lines[0].signature
+        );
+        let other_admin = format!(
+            "{}:0:{}:{}",
+            lines[0].txid,
+            fx.admin_xonly(0),
+            lines[0].signature
+        );
+        let pasted = format!("{text}\n{bad_sig}\n{wrong_tx}\n{other_admin}\njunk");
+        let out = paste_signatures(&dep, &mut target, &pasted);
+        assert_eq!(out.added.len(), 2);
+        assert_eq!(out.invalid.len(), 4);
+        let msg = invalid_signatures_message(&out.invalid).unwrap();
+        assert!(msg.starts_with("Warning: Invalid signatures."));
+        assert_eq!(analyze(&dep, &target).unwrap().signers, vec![1]);
+        // Pasting again adds nothing.
+        let again = paste_signatures(&dep, &mut target, &text);
+        assert_eq!((again.added.len(), again.already_present), (0, 2));
+    }
+
+    #[test]
+    fn merge_and_normalize() {
+        let fx = Fixture::new(3, 2);
+        let dep = fx.deployment();
+        let coin = fee_coin(&fx, 0, 1, 20_000);
+        let base = build_psbt(&dep, &two_claims(&fx, &dep), &[coin], &change(&fx, 19_000)).unwrap();
+        let mut a = base.clone();
+        let mut b = base.clone();
+        sign_as(&fx, &dep, &mut a, 0);
+        sign_as(&fx, &dep, &mut b, 1);
+        assert_eq!(merge(&dep, &mut a, &b).unwrap(), 2);
+        assert_eq!(analyze(&dep, &a).unwrap().signers, vec![0, 1]);
+
+        // A tampered PSBT: a forged signature and a foreign leaf are dropped / overwritten.
+        let mut t = a.clone();
+        let leaf_hash = *t.inputs[0]
+            .tap_script_sigs
+            .keys()
+            .next()
+            .map(|(_, h)| h)
+            .unwrap();
+        t.inputs[0].tap_script_sigs.insert(
+            (fx.admin_xonly(2), leaf_hash),
+            taproot::Signature {
+                signature: schnorr::Signature::from_slice(&[7u8; 64]).unwrap(),
+                sighash_type: TapSighashType::Default,
+            },
+        );
+        t.inputs[0].tap_scripts.clear();
+        let an = normalize(&dep, &mut t).unwrap();
+        // Reusing the pre-normalization analysis must describe exactly the rewritten PSBT.
+        assert_eq!(
+            serde_json::to_value(&an).unwrap(),
+            serde_json::to_value(analyze(&dep, &t).unwrap()).unwrap()
+        );
+        assert_eq!(an.connector_inputs[0].signed_by, vec![0, 1]);
+        assert_eq!(t.inputs[0].tap_scripts.len(), 1);
+        assert_eq!(t.inputs[0].tap_script_sigs.len(), 2);
+    }
+
+    #[test]
+    fn a_fee_signature_is_merged_only_if_it_is_valid_for_the_base() {
+        let fx = Fixture::new(3, 2);
+        let dep = fx.deployment();
+        let coin = fee_coin(&fx, 0, 1, 20_000);
+        let base = build_psbt(
+            &dep,
+            &two_claims(&fx, &dep),
+            std::slice::from_ref(&coin),
+            &change(&fx, 19_000),
+        )
+        .unwrap();
+        let fee_index = analyze(&dep, &base).unwrap().fee_inputs[0].index;
+
+        // The same transaction, but describing the fee coin with another amount: the signature is
+        // valid for that description only.
+        let mut foreign = base.clone();
+        foreign.inputs[fee_index]
+            .witness_utxo
+            .as_mut()
+            .unwrap()
+            .value += Amount::from_sat(1);
+        sign_fee(&fx, &mut foreign, &coin, 1);
+        assert!(analyze(&dep, &foreign).unwrap().fee_inputs[0].signed);
+        let mut target = base.clone();
+        assert_eq!(merge(&dep, &mut target, &foreign).unwrap(), 0);
+        assert!(target.inputs[fee_index].tap_key_sig.is_none());
+
+        // A slot already holding such a signature is repaired by the right one.
+        target.inputs[fee_index].tap_key_sig = foreign.inputs[fee_index].tap_key_sig;
+        assert!(!analyze(&dep, &target).unwrap().fee_inputs[0].signed);
+        let mut owner = base.clone();
+        sign_fee(&fx, &mut owner, &coin, 1);
+        assert_eq!(merge(&dep, &mut target, &owner).unwrap(), 1);
+        assert!(analyze(&dep, &target).unwrap().fee_inputs[0].signed);
+        // Merging it again adds nothing.
+        assert_eq!(merge(&dep, &mut target, &owner).unwrap(), 0);
     }
 
     #[test]
