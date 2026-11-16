@@ -70,3 +70,5 @@ pub mod payout_policy_store;
 pub mod admin_wallet_reservations;
 
 pub mod payout_used_addresses;
+
+pub mod payout_wallet_store;
