@@ -249,9 +249,10 @@ pub async fn sign_in(state: &PayoutState, base_url: &str) -> Result<PayoutSessio
 }
 
 impl PayoutState {
-    pub fn new(device: Arc<dyn PayoutDevice>) -> Self {
+    pub fn new(device: Arc<dyn PayoutDevice>, policies: super::PolicyStore) -> Self {
         Self {
             inner: tokio::sync::Mutex::new(SessionInner::default()),
+            policies,
             coins: Default::default(),
 
             device,
@@ -260,8 +261,11 @@ impl PayoutState {
 
     /// Shares coin reservations with the Admin Wallet panel, which uses the same wallet.
 
-    pub fn ledger() -> Self {
-        Self::new(Arc::new(LedgerPayoutDevice))
+    pub fn ledger(data_dir: Option<std::path::PathBuf>) -> Self {
+        Self::new(
+            Arc::new(LedgerPayoutDevice),
+            super::PolicyStore::new(data_dir),
+        )
     }
 
     pub fn device(&self) -> Arc<dyn PayoutDevice> {

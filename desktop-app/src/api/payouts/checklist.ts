@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { payoutCall } from './call'
+import type { PlanRequest } from './planning'
 
 export const LedgerDetailSchema = z.object({
 	/** The label as the device shows it. */
@@ -32,3 +34,8 @@ export type LedgerDetail = z.infer<typeof LedgerDetailSchema>
 export type LedgerStep = z.infer<typeof LedgerStepSchema>
 
 export type LedgerReview = z.infer<typeof LedgerReviewSchema>
+
+/** What the Ledger will show when Confirm signs the planned transactions. */
+export const payoutReviewConfirm = payoutCall('payout_review_confirm', LedgerReviewSchema, (request: PlanRequest) => ({
+	request,
+}))

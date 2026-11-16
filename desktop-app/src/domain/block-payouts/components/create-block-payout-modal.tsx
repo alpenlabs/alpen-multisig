@@ -3,6 +3,7 @@ import { PayoutButton } from './payout-button'
 import { PayoutModal } from './payout-modal'
 import { useRef } from 'react'
 import type { CreateBlockPayoutHook } from '../hooks/use-create-block-payout'
+import { LedgerChecklist } from './ledger-checklist'
 import { formatAmount } from '../model/block-payouts.mapping'
 import { ReportSummary } from './report-summary'
 import { truncate } from './modal-utils'
@@ -11,16 +12,18 @@ import { ReviewRow as Row, Actions, PrimaryButton, SecondaryButton } from './rev
 type Props = {
 	unit: string
 	flow: CreateBlockPayoutHook
+	onCreated: (message: string) => void
 	onClose: () => void
 }
 
-const STEPS = ['reports', 'review'] as const
+const STEPS = ['reports', 'review', 'confirm'] as const
 
-export function CreateBlockPayoutModal({ unit, flow, onClose }: Props) {
+export function CreateBlockPayoutModal({ unit, flow, onCreated, onClose }: Props) {
 	const fileRef = useRef<HTMLInputElement>(null)
 	const { step, plan } = flow
 	const stepIndex = STEPS.indexOf(step)
 	const pendingOutpoints = new Set(flow.reports.filter((r) => r.inPending).map((r) => r.outpoint))
+	const canContinue = plan !== null && plan.ok && flow.feeRateMessage === null && !flow.isBusy
 
 	function handleFileLoad(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.target.files?.[0]
@@ -28,6 +31,11 @@ export function CreateBlockPayoutModal({ unit, flow, onClose }: Props) {
 		const reader = new FileReader()
 		reader.onload = (ev) => flow.setRawReports(String(ev.target?.result ?? ''))
 		reader.readAsText(file)
+	}
+
+	async function handleConfirm() {
+		const message = await flow.handleConfirm()
+		if (message) onCreated(message)
 	}
 
 	return (
@@ -46,6 +54,7 @@ export function CreateBlockPayoutModal({ unit, flow, onClose }: Props) {
 					<h2 className="m-0 font-display text-display-sm font-normal text-[#0a0a0a]">
 						{step === 'reports' && 'Block payouts: false claim reports'}
 						{step === 'review' && 'Review transactions and fee'}
+						{step === 'confirm' && 'Confirm and sign'}
 					</h2>
 					<p className="m-0 mt-1 text-label text-[#6b7280]">
 						Step {stepIndex + 1} of {STEPS.length} · Payout Administrator
@@ -176,6 +185,33 @@ export function CreateBlockPayoutModal({ unit, flow, onClose }: Props) {
 
 						<Actions>
 							<SecondaryButton onClick={flow.handleBack}>Back</SecondaryButton>
+							<PrimaryButton disabled={!canContinue} onClick={flow.handleNext}>
+								Next
+							</PrimaryButton>
+						</Actions>
+					</>
+				)}
+
+				{step === 'confirm' && plan && (
+					<>
+						<div className="rounded-xl border border-[#e5e7eb] bg-bg-base px-4 py-4">
+							<dl className="flex flex-col gap-2.5">
+								<Row label="Transactions" value={`${plan.txs.length}`} />
+								<Row label="Claim inputs" value={`${plan.txs.reduce((n, t) => n + t.claims.length, 0)}`} />
+								<Row label="Fee rate" value={plan.feeRateLabel} />
+								<Row label="Total fee" value={formatAmount(plan.totalFeeSat, unit)} />
+								<Row label="Fee source" value="Admin Wallet" />
+								<Row label="Change" value="First unused Admin Wallet change address" />
+							</dl>
+						</div>
+						<LedgerChecklist review={flow.review} error={flow.reviewError} unit={unit} />
+						<Actions>
+							<SecondaryButton disabled={flow.isBusy} onClick={flow.handleBack}>
+								Back
+							</SecondaryButton>
+							<PrimaryButton disabled={flow.isBusy || flow.review === null} onClick={() => void handleConfirm()}>
+								{flow.isBusy ? 'Confirm on your Ledger…' : 'Confirm'}
+							</PrimaryButton>
 						</Actions>
 					</>
 				)}

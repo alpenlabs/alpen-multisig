@@ -1,11 +1,14 @@
 //! HTTP client for the coordinator's `/payouts/*` routes (Payout Administrator session).
 
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::infrastructure::rpc_timeout;
 
-pub use payout_admin_core::wire::PayoutConfigView as CoordinatorConfig;
+pub use payout_admin_core::wire::{
+    PastPayoutView as CoordinatorPast, PayoutConfigView as CoordinatorConfig,
+    PendingPayoutView as CoordinatorPending, RefreshOutcome as CoordinatorOutcome,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoordinatorError {
@@ -112,6 +115,17 @@ impl PayoutCoordinator {
     // Expired ids are final: the coordinator refuses to take those transactions again.
     routes! {
         config() -> CoordinatorConfig: GET "/payouts/config", None;
+        pending() -> Vec<CoordinatorPending>: GET "/payouts/pending", None;
+        get_pending(txid: &str) -> CoordinatorPending:
+            GET format!("/payouts/pending/{txid}"), None;
+        past() -> Vec<CoordinatorPast>: GET "/payouts/past", None;
+        expired() -> Vec<String>: GET "/payouts/expired", None;
+        submit(psbt_b64: &str) -> CoordinatorPending:
+            POST "/payouts/pending", Some(json!({ "psbt": psbt_b64 }));
+        report_broadcast(txid: &str, error: Option<&str>) -> CoordinatorOutcome:
+            POST format!("/payouts/pending/{txid}/broadcast"), Some(json!({ "error": error }));
+        refresh(txid: &str) -> CoordinatorOutcome:
+            POST format!("/payouts/pending/{txid}/refresh"), None;
     }
 }
 

@@ -1,7 +1,11 @@
+import type { DeviceOperation } from '../model/device-operation'
 import {
 	feeRateError,
+	payoutConfirm,
 	payoutPlan,
+	payoutReviewConfirm,
 	payoutVerifyReports,
+	type LedgerReview,
 	type PayoutPlan,
 	type PlanClaim,
 	type PlanRequest,
@@ -11,9 +15,9 @@ import { groupsWithout } from '../model/block-payouts.mapping'
 import { createRequestGeneration, requestKey } from '../model/request-identity'
 import type { ReportRow } from '../model/block-payouts.types'
 
-export type CreateStep = 'reports' | 'review'
+export type CreateStep = 'reports' | 'review' | 'confirm'
 
-export function useCreateBlockPayout() {
+export function useCreateBlockPayout(device: DeviceOperation) {
 	const [step, setStep] = useState<CreateStep>('reports')
 	const [rawReports, setRawReports] = useState('')
 	const [reports, setReports] = useState<ReportRow[]>([])
@@ -22,14 +26,20 @@ export function useCreateBlockPayout() {
 	const [groups, setGroups] = useState<string[][] | null>(null)
 	const [feeRate, setFeeRateState] = useState('1')
 	const [plan, setPlan] = useState<PayoutPlan | null>(null)
+	const [review, setReview] = useState<LedgerReview | null>(null)
+	const [reviewError, setReviewError] = useState<string | null>(null)
 	const [reviewGeneration] = useState(createRequestGeneration)
 	const [planGeneration] = useState(createRequestGeneration)
 	const feeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const [planRequest, setPlanRequest] = useState<PlanRequest | null>(null)
+	const [reviewedKey, setReviewedKey] = useState<string | null>(null)
 	const currentRequest = useMemo(() => ({ claims, feeRate, ...(groups ? { groups } : {}) }), [claims, feeRate, groups])
 	const planMatches = planRequest !== null && requestKey(planRequest) === requestKey(currentRequest)
 	const invalidateReview = useCallback(() => {
 		reviewGeneration.next()
+		setReviewedKey(null)
+		setReview(null)
+		setReviewError(null)
 	}, [reviewGeneration])
 	const [isBusy, setIsBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -122,6 +132,44 @@ export function useCreateBlockPayout() {
 		void replan(nextClaims, nextGroups, feeRate, planGeneration.snapshot())
 	}
 
+	const handleNext = async () => {
+		if (!plan?.ok || !planMatches) return
+		const generation = reviewGeneration.next()
+		const request = planRequest!
+		setStep('confirm')
+		setReview(null)
+		setReviewError(null)
+		const res = await payoutReviewConfirm(request)
+		if (!reviewGeneration.isCurrent(generation)) return
+		if (res.ok) {
+			setReviewedKey(requestKey(request))
+			setReview(res.data)
+		} else setReviewError(res.error)
+	}
+
+	const handleConfirm = async (): Promise<string | null> => {
+		if (!plan?.ok || !planMatches || !review || reviewedKey !== requestKey(currentRequest)) return null
+		const owner = device.begin()
+		if (owner === null) return null
+		setIsBusy(true)
+		setError(null)
+		let res
+		try {
+			res = await payoutConfirm(planRequest!, plan.totalFeeSat, review.txids)
+		} finally {
+			device.end(owner)
+			setIsBusy(false)
+		}
+		if (!res.ok) {
+			setError(res.error)
+			return null
+		}
+		const failed = res.data.find((r) => r.broadcast && !r.broadcast.broadcast)
+		if (failed) return `Broadcast failed: ${failed.broadcast?.error ?? 'unknown error'}. Use Retry broadcast.`
+		const n = res.data.length
+		return `${n} transaction${n === 1 ? '' : 's'} created and signed.`
+	}
+
 	return {
 		step,
 		rawReports,
@@ -133,6 +181,8 @@ export function useCreateBlockPayout() {
 		setFeeRate,
 		feeRateMessage,
 		plan: planMatches ? plan : null,
+		review: planMatches && reviewedKey === requestKey(currentRequest) ? review : null,
+		reviewError,
 		isBusy,
 		error,
 		handleVerify,
@@ -140,8 +190,10 @@ export function useCreateBlockPayout() {
 		handleBack: () => {
 			invalidateReview()
 			if (step === 'review') invalidatePlan()
-			setStep('reports')
+			setStep((s) => (s === 'confirm' ? 'review' : 'reports'))
 		},
+		handleNext: () => void handleNext(),
+		handleConfirm,
 	}
 }
 

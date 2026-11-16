@@ -76,3 +76,44 @@ pub async fn payout_plan(
         .await
         .map(|(p, _, _)| p)
 }
+
+use desktop_app::application::payouts::SubmitResultDto;
+use serde::Deserialize;
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmInput {
+    pub request: PlanRequest,
+    pub expected_total_fee_sat: u64,
+    /// The transaction ids of the checklist the admin reviewed (`LedgerReviewDto::txids`).
+    pub expected_txids: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn payout_confirm(
+    input: ConfirmInput,
+    cfg: tauri::State<'_, NodeConfigState>,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<Vec<SubmitResultDto>, String> {
+    let ctx = state.ctx().await?;
+    let node = node(&cfg)?;
+    payouts::confirm_reviewed(
+        &ctx,
+        &input.request,
+        input.expected_total_fee_sat,
+        Some(&input.expected_txids),
+        &state.policies,
+        &node,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn payout_review_confirm(
+    request: PlanRequest,
+    cfg: tauri::State<'_, NodeConfigState>,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<LedgerReviewDto, String> {
+    let ctx = state.ctx().await?;
+    let node = node(&cfg)?;
+    payouts::review_confirm(&ctx, &request, &state.policies, &node).await
+}

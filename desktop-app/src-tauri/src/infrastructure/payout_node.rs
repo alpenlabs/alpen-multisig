@@ -22,6 +22,7 @@ pub trait PayoutNode: Send + Sync {
     async fn tx(&self, txid: &Txid) -> Result<Option<NodeTx>, String>;
     async fn unspent(&self, outpoint: &OutPoint, include_mempool: bool) -> Result<bool, String>;
     async fn tip(&self) -> Result<u64, String>;
+    async fn broadcast(&self, tx: &Transaction) -> Result<Txid, String>;
     async fn scan(&self, descriptors: &[String]) -> Result<Vec<ScannedCoin>, String>;
 }
 const RPC_NOT_FOUND: i64 = -5;
@@ -124,6 +125,15 @@ impl PayoutNode for HttpBitcoinRpcClient {
                 })
             })
             .collect()
+    }
+    async fn broadcast(&self, tx: &Transaction) -> Result<Txid, String> {
+        let v = self
+            .rpc("sendrawtransaction", json!([encode::serialize_hex(tx)]))
+            .await
+            .map_err(|e| e.message)?;
+        v.as_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| "sendrawtransaction: expected a txid".to_string())
     }
 }
 /// One `scantxoutset` result.

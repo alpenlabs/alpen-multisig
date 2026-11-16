@@ -18,3 +18,5 @@ pub mod planner;
 pub mod fees;
 
 pub mod policy;
+
+pub mod wallet_send;

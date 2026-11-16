@@ -1,7 +1,8 @@
+import type {DeviceOperation} from '../model/device-operation'
 import { useCreateBlockPayout } from '../hooks/use-create-block-payout'
-function CreateFlow({ onClose }: { onClose: () => void }) {
-	const flow = useCreateBlockPayout()
-	return <CreateBlockPayoutModal unit="TEST" flow={flow} onClose={onClose} />
+function CreateFlow({ onClose, device }: { onClose: () => void; device: DeviceOperation }) {
+	const flow = useCreateBlockPayout(device)
+	return <CreateBlockPayoutModal unit="TEST" flow={flow} onCreated={onClose} onClose={onClose} />
 }
 import type { BlockPayoutsHook, Tab } from '../hooks/use-block-payouts'
 import { PendingTransactionsList } from './pending-transactions-list'
@@ -11,6 +12,7 @@ import { PasteSignaturesModal } from './paste-signatures-modal'
 import { CreateBlockPayoutModal } from './create-block-payout-modal'
 
 type Props = Omit<BlockPayoutsHook, 'setActiveTab'> & {
+ device: DeviceOperation
 	onTabChange: (tab: Tab) => void
 }
 
@@ -20,6 +22,7 @@ const TAB_LABELS: { id: Tab; label: string }[] = [
 ]
 
 export function BlockPayoutsDashboard({
+ device,
 	activeTab,
 	pendingTxs,
 	pastTxs,
@@ -117,7 +120,7 @@ export function BlockPayoutsDashboard({
 				<PasteSignaturesModal txId={pasteTxId} onSubmit={handlePasteSignatures} onClose={closeModal} />
 			)}
 
-			{activeModal?.kind === 'create' && <CreateFlow onClose={closeModal} />}
+			{activeModal?.kind === 'create' && <CreateFlow device={device} onClose={closeModal} />}
 
 			{/* Toast */}
 			{toast && (

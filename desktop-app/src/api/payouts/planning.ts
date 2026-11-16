@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { payoutCall } from './call'
+import { SubmitResultSchema } from './pending-past'
 
 export const PlanClaimSchema = z.object({
 	outpoint: z.string(),
@@ -34,6 +35,14 @@ export type PlannedTx = z.infer<typeof PlannedTxSchema>
 export type PayoutPlan = z.infer<typeof PayoutPlanSchema>
 
 export const payoutPlan = payoutCall('payout_plan', PayoutPlanSchema, (request: PlanRequest) => ({ request }))
+
+export const payoutConfirm = payoutCall(
+	'payout_confirm',
+	SubmitResultSchema.array(),
+	(request: PlanRequest, expectedTotalFeeSat: number, expectedTxids: string[]) => ({
+		input: { request, expectedTotalFeeSat, expectedTxids },
+	}),
+)
 
 /** Fee rate input: 0.1–10,000 sat/vB in steps of 0.1. Returns an error message, or null when valid. */
 export function parseFeeRate(input: string): { value: number; error: 'format' | 'range' | null } {

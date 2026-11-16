@@ -13,6 +13,8 @@ pub fn attach_invoke_handlers(builder: tauri::Builder<Wry>) -> tauri::Builder<Wr
 
 fn attach_production(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
     builder.invoke_handler(tauri::generate_handler![
+        super::payouts::payout_confirm,
+        super::payouts::payout_review_confirm,
         super::payouts::payout_plan,
         super::payouts::payout_verify_reports,
         super::payouts::payout_load_deployment,
@@ -97,6 +99,8 @@ fn attach_production(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
 
 fn attach_with_dev_signing(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
     builder.invoke_handler(tauri::generate_handler![
+        super::payouts::payout_confirm,
+        super::payouts::payout_review_confirm,
         super::payouts::payout_plan,
         super::payouts::payout_verify_reports,
         super::payouts::payout_load_deployment,
