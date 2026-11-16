@@ -5,9 +5,11 @@ use serde_json::{json, Value};
 
 use crate::infrastructure::rpc_timeout;
 
+pub use payout_admin_core::payout_tx::InvalidSignature as CoordinatorInvalidSignature;
 pub use payout_admin_core::wire::{
-    PastPayoutView as CoordinatorPast, PayoutConfigView as CoordinatorConfig,
-    PendingPayoutView as CoordinatorPending, RefreshOutcome as CoordinatorOutcome,
+    PastPayoutView as CoordinatorPast, PasteSignaturesView as CoordinatorPaste,
+    PayoutConfigView as CoordinatorConfig, PendingPayoutView as CoordinatorPending,
+    RefreshOutcome as CoordinatorOutcome,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -122,6 +124,8 @@ impl PayoutCoordinator {
         expired() -> Vec<String>: GET "/payouts/expired", None;
         submit(psbt_b64: &str) -> CoordinatorPending:
             POST "/payouts/pending", Some(json!({ "psbt": psbt_b64 }));
+        paste(txid: &str, text: &str) -> CoordinatorPaste:
+            POST format!("/payouts/pending/{txid}/signatures"), Some(json!({ "signatures": text }));
         report_broadcast(txid: &str, error: Option<&str>) -> CoordinatorOutcome:
             POST format!("/payouts/pending/{txid}/broadcast"), Some(json!({ "error": error }));
         refresh(txid: &str) -> CoordinatorOutcome:

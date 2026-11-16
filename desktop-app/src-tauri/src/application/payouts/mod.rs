@@ -96,3 +96,5 @@ use payout_admin_core::payout_tx::ConnectorRef;
 pub use pending::*;
 
 use payout_admin_core::{fees, planner::PlanCoin};
+
+use crate::infrastructure::payout_coordinator::CoordinatorOutcome;
