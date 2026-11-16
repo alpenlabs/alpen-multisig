@@ -260,6 +260,39 @@ export function NodeConfigModal({ isOpen, config, localNodeStatus, isSaving, onS
 							</div>
 						)}
 
+						<div className="mt-1 space-y-3 rounded-xl border border-[#e5e7eb] p-4">
+							<p className="m-0 text-label font-semibold text-[#374151]">Payout Administrators</p>
+							<div>
+								<label className="mb-1 block text-label font-medium text-[#374151]" htmlFor="payout-params-path">
+									Bridge parameters file (params.toml)
+								</label>
+								<input
+									id="payout-params-path"
+									type="text"
+									placeholder="/path/to/strata-bridge/params.toml"
+									value={draft.payoutParamsPath ?? ''}
+									onChange={(e) => setDraft((prev) => ({ ...prev, payoutParamsPath: e.target.value }))}
+									className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-body-sm text-[#0a0a0a] outline-none focus:border-[#0a0a0a] focus:ring-1 focus:ring-[#0a0a0a]"
+								/>
+							</div>
+							<div>
+								<label className="mb-1 block text-label font-medium text-[#374151]" htmlFor="payout-roster-path">
+									Signer roster (admin xpubs)
+								</label>
+								<input
+									id="payout-roster-path"
+									type="text"
+									placeholder="/path/to/payout-signers.toml"
+									value={draft.payoutRosterPath ?? ''}
+									onChange={(e) => setDraft((prev) => ({ ...prev, payoutRosterPath: e.target.value }))}
+									className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-body-sm text-[#0a0a0a] outline-none focus:border-[#0a0a0a] focus:ring-1 focus:ring-[#0a0a0a]"
+								/>
+								<p className="mt-1 text-mono-sm text-[#9ca3af]">
+									Only for Block Payouts. Each roster xpub is checked against the admin keys in params.toml.
+								</p>
+							</div>
+						</div>
+
 						{localUnreachable && (
 							<div className="flex items-start gap-2 rounded-xl border border-accent-border bg-highlight-surface p-3 text-label text-emphasis">
 								<svg viewBox="0 0 24 24" fill="none" width={14} height={14} className="mt-0.5 shrink-0" aria-hidden>

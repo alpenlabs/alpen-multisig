@@ -305,6 +305,14 @@ export const nodeConfigSchema = z.object({
 		.string()
 		.nullish()
 		.transform((v) => v ?? undefined),
+	payoutParamsPath: z
+		.string()
+		.nullish()
+		.transform((v) => v ?? undefined),
+	payoutRosterPath: z
+		.string()
+		.nullish()
+		.transform((v) => v ?? undefined),
 })
 
 export const localNodeStatusSchema = z.object({

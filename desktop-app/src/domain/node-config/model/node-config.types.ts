@@ -10,6 +10,9 @@ export type NodeConfig = {
 	customElectrumUrl?: string
 	// Orchestrator backend URL override. Empty/unset falls back to VITE_ORCHESTRATOR_BASE_URL.
 	customOrchestratorUrl?: string
+	// Payout Administrators: strata-bridge params.toml and the signer roster (account xpubs).
+	payoutParamsPath?: string
+	payoutRosterPath?: string
 }
 
 export type LocalNodeStatus = {

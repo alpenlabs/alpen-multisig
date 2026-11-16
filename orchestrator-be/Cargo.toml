@@ -48,6 +48,7 @@ strata-predicate = { workspace = true }
 strata-crypto = { workspace = true }
 strata-l1-txfmt = { workspace = true }
 strata-l1-envelope-fmt = { workspace = true }
+payout-admin-core = { workspace = true }
 
 [dev-dependencies]
 http-body-util = "0.1"
@@ -56,4 +57,5 @@ tower = { version = "0.5", features = ["util"] }
 # reads the installed one through inherent methods and compares bytes. Keeping these out of
 # `[dependencies]` is what keeps that true.
 bitcoin-bosd = { workspace = true }
+payout-admin-core = { workspace = true, features = ["test-support"] }
 strata-asm-bridge-types = { workspace = true }

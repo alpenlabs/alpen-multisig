@@ -20,6 +20,10 @@ pub struct NodeConfigDto {
     /// Orchestrator backend URL override (frontend-only resolution).
     #[serde(default)]
     pub custom_orchestrator_url: Option<String>,
+    #[serde(default)]
+    pub payout_params_path: Option<String>,
+    #[serde(default)]
+    pub payout_roster_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +70,8 @@ pub async fn get_node_config(state: State<'_, NodeConfigState>) -> Result<NodeCo
         custom_btc_rpc_pass: cfg.custom_btc_rpc_pass,
         custom_electrum_url: cfg.custom_electrum_url,
         custom_orchestrator_url: cfg.custom_orchestrator_url,
+        payout_params_path: cfg.payout_params_path,
+        payout_roster_path: cfg.payout_roster_path,
     })
 }
 
@@ -83,6 +89,8 @@ pub async fn save_node_config(
         custom_btc_rpc_pass: config.custom_btc_rpc_pass,
         custom_electrum_url: config.custom_electrum_url,
         custom_orchestrator_url: config.custom_orchestrator_url,
+        payout_params_path: config.payout_params_path.clone(),
+        payout_roster_path: config.payout_roster_path.clone(),
     };
     node_config_store::save_node_config(&app, &new_config)?;
     let mut guard = state.0.write().map_err(|e| format!("lock error: {e}"))?;
@@ -103,6 +111,8 @@ pub async fn check_local_node(
         custom_btc_rpc_pass: config.custom_btc_rpc_pass,
         custom_electrum_url: config.custom_electrum_url,
         custom_orchestrator_url: config.custom_orchestrator_url,
+        payout_params_path: config.payout_params_path.clone(),
+        payout_roster_path: config.payout_roster_path.clone(),
     };
 
     let client = reqwest::Client::builder()

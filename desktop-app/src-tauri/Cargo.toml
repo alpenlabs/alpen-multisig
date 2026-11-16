@@ -74,6 +74,7 @@ ledger-apdu = "0.11"
 bip39 = "2"
 bdk_wallet = { workspace = true }
 bdk_electrum = { workspace = true }
+payout-admin-core = { workspace = true }
 
 [dev-dependencies]
 # Wallet sync uses Electrum (bdk_electrum); Core RPC stays only as the regtest
@@ -82,6 +83,7 @@ bdk_bitcoind_rpc = { workspace = true }
 # Wallet fixtures (funded wallet, insert_tx/anchor/seen_at) for the Phase 5
 # unconfirmed-tx list and fee-bump unit tests.
 bdk_wallet = { workspace = true, features = ["test-utils"] }
+payout-admin-core = { workspace = true, features = ["test-support"] }
 
 [lib]
 name = "desktop_app"

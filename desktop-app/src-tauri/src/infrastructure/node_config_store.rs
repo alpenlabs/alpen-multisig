@@ -36,6 +36,12 @@ pub struct NodeConfig {
     /// `VITE_ORCHESTRATOR_BASE_URL`. Not used by any Rust-side resolution.
     #[serde(default)]
     pub custom_orchestrator_url: Option<String>,
+    /// strata-bridge `params.toml` for Payout Administrators (Block Payouts).
+    #[serde(default)]
+    pub payout_params_path: Option<String>,
+    /// Signer roster (each admin's account xpub), checked against `params.toml`.
+    #[serde(default)]
+    pub payout_roster_path: Option<String>,
 }
 
 impl NodeConfig {

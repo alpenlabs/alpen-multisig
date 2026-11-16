@@ -34,6 +34,8 @@ async fn main() -> anyhow::Result<()> {
     ));
     warn_without_txindex(btc_client.clone());
 
+    application::payout_deployment::load_payout_deployment(&config)?;
+
     let state = if let Some(database_url) = &config.database_url {
         let pool = PgPoolOptions::new()
             .max_connections(10)

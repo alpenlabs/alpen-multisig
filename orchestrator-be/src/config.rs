@@ -16,6 +16,9 @@ pub struct Config {
     pub proposal_expiry_days: u64,
     /// The chain the ASM is anchored to. Env: BITCOIN_NETWORK (default `regtest`).
     pub bitcoin_network: bitcoin::Network,
+    /// strata-bridge `params.toml` naming the Payout Administrators. Env: PAYOUT_ADMIN_PARAMS_PATH.
+    /// Unset: the payout routes refuse every request.
+    pub payout_admin_params_path: Option<String>,
 }
 
 /// Parses a canonical `BITCOIN_NETWORK` token, the same set the desktop app accepts. An unknown
@@ -99,6 +102,10 @@ impl Config {
             bitcoin_network: parse_network(
                 &std::env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
             )?,
+            payout_admin_params_path: std::env::var("PAYOUT_ADMIN_PARAMS_PATH")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         })
     }
 }

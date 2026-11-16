@@ -26,6 +26,7 @@ jobs:
           filters: |
             code:
               - 'orchestrator-be/**'
+              - 'payout-admin-core/**'
               - 'desktop-app/**'
               - 'e2e-tests/**'
               - 'Cargo.toml'
