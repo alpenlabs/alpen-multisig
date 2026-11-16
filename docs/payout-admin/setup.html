@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payout Admin setup</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body><main>
+<p class="eyebrow">Payout Administrator · regtest tester kit</p>
+<h1>Build and run a shared test round</h1>
+<p class="lede">Compile your own binaries. One host provides the chain and coordinator. Each tester signs with their own Ledger on their own computer.</p>
+<nav class="toc" aria-label="Contents"><ol>
+<li><a href="#round">The test round</a></li><li><a href="#prerequisites">Prerequisites</a></li>
+<li><a href="#build">Build the binaries</a></li><li><a href="#host">Prepare the host</a></li>
+<li><a href="#identity">Read identities and assemble the roster</a></li><li><a href="#seed">Seed the chain</a></li>
+<li><a href="#coordinator">Start the coordinator</a></li><li><a href="#desktop">Launch and configure each desktop</a></li>
+<li><a href="#funding">Funding and confirmations</a></li><li><a href="#reset">Reset a round</a></li>
+<li><a href="#troubleshooting">Troubleshooting</a></li></ol></nav>
+<p>Next: <a href="guide.html">feature guide</a> · <a href="ledger-tests.html">physical Ledger tests</a> · <a href="kit/README.md">kit file reference</a>.</p>
+
+<section id="round"><h2>1. The test round</h2>
+<p>One host runs the shared regtest chain and the coordinator release binary. Every tester runs their own Bitcoin Core in <strong>regtest</strong> with <code>txindex=1</code>, peered with the host's node, plus the desktop release binary, and connects their own Ledger. The testers' Ledger keys are the Payout Administrator multisig. The host can also be a tester.</p>
+<p>Each desktop talks only to the Bitcoin Core on its own machine, as the PRD intends: every admin checks false claim reports against their own node. Bitcoin RPC never leaves a machine. Only the peer-to-peer port of the host's node and the coordinator port are shared.</p>
+<p>Everyone uses the same chain, seeded <code>params.toml</code>, and ordered <code>roster.toml</code>. The seeder creates contested unpaid claims and funds every Admin Wallet. A majority is the default signing threshold. For example, three testers need two signatures. This round covers Payout Administrators only. It needs no ASM, Strata RPC service, Electrum server, or Docker.</p>
+<div class="warn"><p>Use only an isolated trusted LAN or VPN. The coordinator uses plain HTTP in this kit. Open host ports 18444 (regtest peer-to-peer) and 3000 (coordinator) to testers only. Do not expose them to the Internet. Keep RPC port 18443 on loopback on every machine. All coins in this round are regtest coins.</p></div>
+</section>
+
+<section id="prerequisites"><h2>2. Prerequisites on every build machine</h2>
+<p>Check out the same revision as the other testers. Run the commands below from the repository root unless a command changes directory. You need Git, a C/C++ toolchain, rustup, Node, and network access for Cargo git dependencies and npm packages.</p>
+<h3>macOS</h3>
+<p>Install Xcode Command Line Tools, or install and open full Xcode once:</p>
+<pre><code>xcode-select --install</code></pre>
+<h3>Linux</h3>
+<p>For Debian/Ubuntu, install the Tauri 2 libraries plus the repository's Linux build dependencies. USB development libraries support the hardware transports.</p>
+<pre><code>sudo apt update
+sudo apt install build-essential curl wget file pkg-config \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+  libjavascriptcoregtk-4.1-dev libxdo-dev libssl-dev \
+  libayatana-appindicator3-dev librsvg2-dev libudev-dev libusb-1.0-0-dev</code></pre>
+<p>Other distributions need equivalent packages. See the <a href="https://v2.tauri.app/start/prerequisites/">official Tauri 2 prerequisites</a>. Linux package details are also in the repository's <code>docs/operations/desktop-build-linux.md</code>.</p>
+<h3>Rust and Node on both platforms</h3>
+<p>Install Rust through rustup. The repository pins <code>nightly-2026-07-01</code> in <code>rust-toolchain.toml</code>. Do not substitute stable.</p>
+<pre><code>rustup toolchain install nightly-2026-07-01 --component cargo,clippy,rustc,rustfmt
+rustup show active-toolchain
+rustc --version</code></pre>
+<p>Use Node <strong>22.23.4</strong>. With fnm in zsh:</p>
+<pre><code>eval "$(fnm env --shell zsh)"
+fnm install 22.23.4
+fnm use 22.23.4
+node --version
+npm ci</code></pre>
+<p>For bash use <code>fnm env --shell bash</code>. Alternatively, after loading nvm, run <code>nvm install 22.23.4</code>, <code>nvm use 22.23.4</code>, then <code>npm ci</code>. Run <code>npm ci</code> at the <strong>repository root</strong>: this is an npm workspace with <code>desktop-app</code> as a member.</p>
+<h3>Bitcoin and Ledger</h3>
+<p>The host and every tester need <code>bitcoind</code> and <code>bitcoin-cli</code> from Bitcoin Core <strong>28 or newer</strong>. Version 28 adds the TRUC relay rules used by payouts. Download it from <a href="https://bitcoincore.org/en/download/">bitcoincore.org</a> or use your package manager, for example <code>brew install bitcoin</code> on macOS.</p>
+<p>Each tester needs a Ledger, a USB data cable, and <strong>Bitcoin Test 2.4.6 or newer</strong> installed on it. Unlock the device and open Bitcoin Test when instructed. Close other apps that hold the USB connection. Linux users need Ledger USB/udev permissions for their normal user. Trezor and BitBox are not supported. Never share recovery words or private keys.</p>
+</section>
+
+<section id="build"><h2>3. Build the release binaries</h2>
+<pre><code># Repository root. The host builds the coordinator; every tester builds the desktop app.
+cargo build --release -p orchestrator-be
+# macOS: only the .app (the DMG step needs Finder scripting and is not needed here)
+(cd desktop-app &amp;&amp; npm run tauri build -- --bundles app)
+# Linux: an AppImage, or deb
+(cd desktop-app &amp;&amp; npm run tauri build -- --bundles appimage)</code></pre>
+<p>The coordinator package declares its binary name as <code>server</code> in <code>orchestrator-be/Cargo.toml</code>. The desktop command runs the TypeScript/Vite build, compiles Rust, then bundles the app. The first build takes a while. Build natively on each tester's platform. The coordinator address is set later in the app, not at build time.</p>
+<table><thead><tr><th>Artifact</th><th>Default path from repository root</th></tr></thead><tbody>
+<tr><td>Coordinator</td><td><code>target/release/server</code></td></tr>
+<tr><td>macOS application</td><td><code>target/release/bundle/macos/Strata Multisig.app</code></td></tr>
+<tr><td>macOS executable inside app</td><td><code>target/release/bundle/macos/Strata Multisig.app/Contents/MacOS/desktop-app</code></td></tr>
+<tr><td>Linux Debian package</td><td><code>target/release/bundle/deb/*.deb</code></td></tr>
+<tr><td>Linux AppImage</td><td><code>target/release/bundle/appimage/*.AppImage</code></td></tr>
+<tr><td>Linux unbundled executable</td><td><code>target/release/desktop-app</code></td></tr>
+</tbody></table>
+<p><code>tauri.conf.json</code> sets product name <code>Strata Multisig</code>, version <code>0.4.1</code>, and bundle targets <code>all</code>. Package names include version and architecture; Linux can also produce an RPM. The paths above assume no custom Cargo target directory or cross-compilation target. The Tauri build output prints the actual paths.</p>
+<p>Tauri references: <a href="https://v2.tauri.app/distribute/macos-application-bundle/">macOS app</a>, <a href="https://v2.tauri.app/distribute/dmg/">DMG</a>, <a href="https://v2.tauri.app/distribute/debian/">Debian</a>, and <a href="https://v2.tauri.app/distribute/appimage/">AppImage</a>. The initial Linux bundle build downloads helpers.</p>
+<div class="note"><p>An unsigned macOS build may be blocked on first open. In Finder, right-click <strong>Strata Multisig.app</strong>, choose <strong>Open</strong>, then confirm Open if offered. If macOS requires it, use Privacy &amp; Security's Open Anyway for this locally built app. Quit it after this first opening. Use the launcher below for the test round so the network environment is explicit.</p></div>
+</section>
+
+<section id="host"><h2>4. Host: prepare an isolated round directory</h2>
+<p>Use a new directory for each round. These commands use a sibling of the repository, so generated keys and chain data are not committed. Keep this shell open for the later host commands.</p>
+<pre><code># Repository root
+REPO_ROOT="$PWD"
+ROUND="$REPO_ROOT/../payout-round-01"
+mkdir -p "$ROUND"
+cp docs/payout-admin/kit/* "$ROUND/"
+mkdir -p "$ROUND/bitcoin"
+chmod 700 "$ROUND"
+chmod 600 "$ROUND/coordinator.env" "$ROUND/bitcoin.conf"</code></pre>
+<p><code>$ROUND/bitcoin.conf</code> is the host's node. It keeps RPC on loopback for the seeder and the coordinator and listens for testers' nodes on the regtest peer-to-peer port 18444. Keep <code>txindex=1</code>, <code>server=1</code>, and the regtest settings. Its RPC user and password are <code>user</code> and <code>password</code>, the values the app's Local mode uses; they are acceptable only because RPC stays on loopback and the chain is regtest.</p>
+<pre><code>bitcoind -datadir="$ROUND/bitcoin" -conf="$ROUND/bitcoin.conf" -daemon
+bitcoin-cli -regtest -datadir="$ROUND/bitcoin" -conf="$ROUND/bitcoin.conf" getblockchaininfo
+bitcoin-cli -regtest -datadir="$ROUND/bitcoin" -conf="$ROUND/bitcoin.conf" getindexinfo</code></pre>
+<p>Wait for RPC to respond. Check that <code>chain</code> is <code>regtest</code> and <code>txindex.synced</code> is <code>true</code>. Do not seed until both are correct. The config's <code>fallbackfee</code> is for Core wallet funding on a chain without fee estimates; it does not choose the app's payout fee.</p>
+</section>
+
+<section id="identity"><h2>5. Each tester: read their Ledger identity</h2>
+<p>Close the desktop app and other Ledger clients. Unlock your Ledger and open Bitcoin Test. From your repository root:</p>
+<pre><code>LEDGER_NETWORK=regtest LEDGER_PHYSICAL=1 \
+  cargo test -p alpen-multisig-e2e-tests --test ledger_identity -- --nocapture</code></pre>
+<p>This helper reads the app name/version, master fingerprint, and account xpub. It does not sign. Find the <code>LEDGER_IDENTITY</code> JSON line. Check <code>app</code> is Bitcoin Test, <code>version</code> is at least 2.4.6, and <code>accountPath</code> is <code>m/86'/1'/73'</code>. Send only <code>fingerprint</code> and <code>accountXpub</code>, plus your label, to the host.</p>
+<p>The host copies the template and replaces every placeholder:</p>
+<pre><code>cp "$ROUND/roster.example.toml" "$ROUND/roster-input.toml"</code></pre>
+<p>Keep <code>network = "regtest"</code>. Add one <code>[[admins]]</code> per tester. Copy <code>accountXpub</code> into <code>xpub</code> and the exact eight hexadecimal fingerprint characters into <code>fingerprint</code>. Agree on the order before seeding. The derived <code>xpub/0/0</code> at each position becomes that tester's admin key in <code>params.toml</code>. Do not reorder the roster later.</p>
+</section>
+
+<section id="seed"><h2>6. Host: seed the chain</h2>
+<p>The seeding test connects to the running Core node. It starts neither Core nor the coordinator. Run from the repository root with the completed roster:</p>
+<pre><code>PAYOUT_SEED_DIR="$ROUND/seed" \
+PAYOUT_SEED_RPC_URL=http://127.0.0.1:18443 \
+PAYOUT_SEED_RPC_USER=user \
+PAYOUT_SEED_RPC_PASS=password \
+PAYOUT_SEED_ROSTER="$ROUND/roster-input.toml" \
+PAYOUT_SEED_CLAIMS=5 \
+PAYOUT_SEED_FUND_SATS=100000000 \
+  cargo test -p alpen-multisig-e2e-tests --test payout_regtest_seed -- --nocapture</code></pre>
+<p><code>PAYOUT_SEED_THRESHOLD</code> is optional; omitted, it is <code>n/2 + 1</code>. For three testers, set it to <code>2</code> explicitly if desired. Claims default to 5. Funding defaults to 100,000,000 sats per admin, split into three coins and mined to at least six confirmations. Without <code>PAYOUT_SEED_DIR</code> the test returns without seeding.</p>
+<table><thead><tr><th>Output in seed/</th><th>Use</th></tr></thead><tbody>
+<tr><td><code>params.toml</code></td><td>Deployment root of trust. Same file for coordinator and all desktops.</td></tr>
+<tr><td><code>roster.toml</code></td><td>Validated roster, in params order. Same file for all desktops.</td></tr>
+<tr><td><code>reports.json</code></td><td>False claim reports to paste into Block Payouts. The ACK has at least six confirmations.</td></tr>
+<tr><td><code>seed.json</code></td><td>Summary with transaction ids, heights, funded addresses, and coordinator environment values.</td></tr>
+<tr><td><code>seed-keys.json</code></td><td>Generated bridge/covenant test keys for reruns. Keep on the host, outside Git. Do not distribute.</td></tr>
+</tbody></table>
+<p>Distribute only <code>params.toml</code>, <code>roster.toml</code>, and <code>reports.json</code> to each tester over your trusted channel. Each tester saves them locally and checks they received the same files. Do not point Settings at the unfilled example roster.</p>
+</section>
+
+<section id="coordinator"><h2>7. Host: start the coordinator binary</h2>
+<p>The copied <code>coordinator.env</code> includes every setting read by <code>Config::from_env</code>, plus logging. Its relative params path resolves from the environment file's directory. Check it points at the seeded file. Leave <code>DATABASE_URL</code> unset for in-memory storage.</p>
+<pre><code>REPO_ROOT="$REPO_ROOT" "$ROUND/run-coordinator.sh" --dry-run
+REPO_ROOT="$REPO_ROOT" "$ROUND/run-coordinator.sh"</code></pre>
+<p>Keep the process running in that terminal. From another terminal:</p>
+<pre><code>curl --fail http://127.0.0.1:3000/api/v1/health
+curl --fail http://127.0.0.1:3000/api/v1/ready</code></pre>
+<p>The first checks the process; the second checks Bitcoin RPC reachability. Neither proves a tester's roster matches. The host shares its LAN address and ports with testers. The kit sets <code>STRATA_ADMIN_STATE_RPC_URL=http://127.0.0.1:8080</code> explicitly. Payouts do not use this service. The code defaults to that URL if absent, although the operations runbook lists it as required. Do not use <code>mock://</code> in a normal release build.</p>
+<div class="warn"><p>In-memory storage loses pending/past records and login sessions on coordinator restart. Restarting does not undo transactions on the chain. Use a fresh coordinated round for a clean reset.</p></div>
+</section>
+
+<section id="desktop"><h2>8. Each tester: start your node, launch and configure the desktop</h2>
+<h3>Your own regtest node</h3>
+<p>Copy <code>tester-bitcoin.conf</code> into a new data directory, put the host's LAN address into its <code>connect=</code> line, and start the node. It downloads the shared chain from the host.</p>
+<pre><code>NODE="$HOME/payout-round-01-node"
+mkdir -p "$NODE"
+cp docs/payout-admin/kit/tester-bitcoin.conf "$NODE/bitcoin.conf"
+# Edit "$NODE/bitcoin.conf": replace HOST in connect=HOST:18444
+bitcoind -datadir="$NODE" -conf="$NODE/bitcoin.conf" -daemon
+bitcoin-cli -regtest -datadir="$NODE" -conf="$NODE/bitcoin.conf" getblockchaininfo
+bitcoin-cli -regtest -datadir="$NODE" -conf="$NODE/bitcoin.conf" getindexinfo</code></pre>
+<p>Wait until <code>blocks</code> equals the host's height and <code>txindex.synced</code> is <code>true</code>. If you are the host and also a tester, skip this: the host node already uses the RPC port and credentials Local mode expects.</p>
+<h3>Launch the desktop</h3>
+<p>Quit any existing instance. From the repository root:</p>
+<pre><code>docs/payout-admin/kit/run-desktop.sh --dry-run
+docs/payout-admin/kit/run-desktop.sh</code></pre>
+<p>On macOS the launcher runs the executable inside the built .app. On Linux it selects the single built AppImage, or the release executable if no AppImage exists. To use an installed .deb binary, set <code>DESKTOP_BIN=/usr/bin/desktop-app</code>. For a custom target directory, set <code>RELEASE_DIR</code> to its release directory. For an installed macOS app:</p>
+<pre><code>DESKTOP_BIN="/Applications/Strata Multisig.app/Contents/MacOS/desktop-app" \
+  docs/payout-admin/kit/run-desktop.sh</code></pre>
+<p>The script exports <code>BITCOIN_NETWORK=regtest</code> and <code>ALLOW_INSECURE_HTTP_URL=1</code> only for its process and the launched app. It writes no file or shell profile. Run the script; do not source it.</p>
+<h3>Settings &gt; Node</h3>
+<p>Select <strong>Local node</strong>. In this mode the app uses the Bitcoin Core at <code>http://127.0.0.1:18443</code> with user <code>user</code> and password <code>password</code>, which is what <code>tester-bitcoin.conf</code> sets. Replace <code>HOST</code> below with the host's LAN address.</p>
+<table><thead><tr><th>Setting</th><th>Value for this round</th></tr></thead><tbody>
+<tr><td>Connection</td><td><strong>Local node</strong></td></tr>
+<tr><td>Orchestrator URL</td><td><code>http://HOST:3000/api/v1</code></td></tr>
+<tr><td>Bridge parameters file (params.toml)</td><td>Absolute local path to the seeded <code>params.toml</code> you received</td></tr>
+<tr><td>Signer roster (admin xpubs)</td><td>Absolute local path to the seeded <code>roster.toml</code> you received</td></tr>
+</tbody></table>
+<figure class="app"><img src="img/app/node-settings.jpg" alt="Node connection dialog with Local node selected, the Orchestrator URL and the params and roster paths." loading="lazy"><figcaption>Local node selected, the Orchestrator URL and the two Payout Administrator files. Your URL and paths differ.</figcaption></figure>
+<p>Save the settings. They persist in <code>node-config.json</code> in the app configuration directory. The network is a process setting, not a Node setting. The Strata and Electrum status shown in the app may read unreachable: Payout Administrator flows need neither.</p>
+<div class="note"><p>Why Local and not Custom: on this branch the Orchestrator URL field exists only in Local mode. Plain <code>http://</code> to another machine is refused by the app unless <code>ALLOW_INSECURE_HTTP_URL=1</code> is set; the launcher sets it for the launched app only, for this regtest round.</p></div>
+<h3>Sign in as Payout Administrator</h3>
+<p>Connect and unlock your Ledger, then open Bitcoin Test. Choose the Ledger connection and the <strong>Payout Administrator</strong> role. Review the app's sign-in checklist. Compare every message screen with the Ledger, then approve only if it matches. The connected fingerprint and account xpub must match your roster entry. The app also checks the coordinator's deployment against your params file.</p>
+<p>Open Block Payouts and its Admin Wallet dialog. Continue with the <a href="guide.html">feature guide</a> and <a href="ledger-tests.html">physical Ledger tests</a>.</p>
+</section>
+
+<section id="funding"><h2>9. Funding and confirmations</h2>
+<p>No tester needs to send funds manually: the seeder funds every Admin Wallet's first receive address, <code>m/86'/1'/73'/0/0</code>. Compare the funded address in <code>seed.json</code> with the intended tester. The dialog shows confirmed incoming funds; incoming unconfirmed coins are not displayed. Fee inputs must be confirmed.</p>
+<p>Regtest has no automatic miner. After a payout broadcasts, the host mines a block to confirm it. Create a separate mining wallet once, then obtain an address and mine:</p>
+<pre><code>bitcoin-cli -regtest -datadir="$ROUND/bitcoin" -conf="$ROUND/bitcoin.conf" createwallet round-miner
+MINING_ADDRESS="$(bitcoin-cli -regtest -datadir="$ROUND/bitcoin" -conf="$ROUND/bitcoin.conf" \
+  -rpcwallet=round-miner getnewaddress)"
+bitcoin-cli -regtest -datadir="$ROUND/bitcoin" -conf="$ROUND/bitcoin.conf" \
+  generatetoaddress 1 "$MINING_ADDRESS"</code></pre>
+<p>Use <code>generatetoaddress 6 "$MINING_ADDRESS"</code> for six new blocks. On a later host session, load the existing wallet with <code>loadwallet round-miner</code> if needed, instead of creating it again. Give the app time to refresh; payout lists poll every 15 seconds. Do not mine while a test specifically needs an unconfirmed transaction.</p>
+</section>
+
+<section id="reset"><h2>10. Reset together</h2>
+<ol class="steps"><li>Ask every tester to close the app. Stop the coordinator with Ctrl-C.</li>
+<li>Stop this round's node with the command below. Wait until it exits.</li>
+<li>Keep the old round directory as an archive. Repeat host setup using a new sibling directory such as <code>payout-round-02</code>, with a fresh Bitcoin data directory and fresh seed output. Never run both nodes on the same ports.</li>
+<li>Reuse the agreed public roster if the testers and devices are unchanged. Seed again, distribute the new files, update every desktop's local paths, and restart the coordinator and desktops.</li></ol>
+<pre><code>bitcoin-cli -regtest -datadir="$ROUND/bitcoin" -conf="$ROUND/bitcoin.conf" stop</code></pre>
+<p>Restarting only the coordinator clears its memory but leaves spent connectors and balances on chain. Changing only a roster breaks its correspondence with params. Do not combine old reports with a fresh chain. For additional claims on the same deployment, the seeder contract preserves bridge/covenant keys in <code>seed-keys.json</code>; retain that file for reruns.</p>
+<p>Desktop settings and wallet history survive app restarts. For a fully pristine UI test, use a fresh OS test account and configure it with the new round files. Do not reset or erase the Ledger.</p>
+</section>
+
+<section id="troubleshooting"><h2>11. Troubleshooting</h2>
+<details><summary>Node is not regtest</summary><p>Check <code>getblockchaininfo</code> on the exact host/port configured in Settings. It must report <code>regtest</code>. Check the coordinator env and relaunch the desktop with the kit. A URL does not select the app's network. Use the dedicated round data directory.</p></details>
+<details><summary>No txindex, or transactions cannot be found</summary><p>Check <code>getindexinfo</code> for <code>txindex</code> with <code>synced: true</code>. Stop Core, enable <code>txindex=1</code>, restart and let it finish indexing. Keep pruning disabled. Check that reports belong to this chain. Both coordinator and desktop need access to indexed transactions.</p></details>
+<details><summary>Roster mismatch or Ledger not recognized</summary><p>Use the seeded roster, not the template. Check network, order, fingerprints and complete account xpubs. Every roster <code>xpub/0/0</code> must match the key at the same position in params. Read the identity again with the correct device and regtest account. All desktops and the coordinator must use the same params file.</p></details>
+<details><summary>Ledger app not open, USB busy, or wrong app version</summary><p>Unlock the Ledger, open Bitcoin Test, and close other USB clients. Check Linux device permissions if access is denied. Bitcoin Test must be 2.4.6 or newer. Update through the device's supported app installation flow if needed. If you change the app version after sign-in, sign in again so the checklist matches the device.</p></details>
+<details><summary>Coordinator says “not configured”</summary><p>Set <code>PAYOUT_ADMIN_PARAMS_PATH</code> to the seeded params file and restart with <code>run-coordinator.sh</code>. Confirm the printed path exists relative to the env file directory. Check <code>BITCOIN_NETWORK=regtest</code>. The launcher refuses missing params; launching the binary directly without the setting leaves payout routes disabled.</p></details>
+<details><summary>BITCOIN_NETWORK is missing but the app still says regtest</summary><p>The code defaults to regtest only when the variable is absent. Startup also loads <code>desktop-app/.env</code> at the build machine's compiled-in path, then discovers a <code>.env</code> from the working directory or its ancestors. Existing environment variables win. The launcher explicitly exports regtest so an inherited or discovered setting cannot silently select another network. It never writes an .env or edits your shell profile.</p></details>
+<details><summary>Connection refused, unauthorized, or wrong host</summary><p>Check your own node first: <code>bitcoin-cli -regtest -datadir="$NODE" -conf="$NODE/bitcoin.conf" getblockchaininfo</code>. Its height must equal the host's; if it does not, check <code>getpeerinfo</code>, the host address in <code>connect=</code> and the host firewall for port 18444. Check the Orchestrator URL, including <code>/api/v1</code>, with <code>curl http://HOST:3000/api/v1/health</code>. An error that says the orchestrator base_url must use https means the app was not started through the launcher. Do not use the Strata RPC field for the coordinator.</p></details>
+<details><summary>Launcher cannot find a binary or refuses .env</summary><p>Check the build completed and use an absolute <code>COORDINATOR_BIN</code> or <code>DESKTOP_BIN</code> override for a custom build path. A copied kit needs <code>REPO_ROOT</code>. The coordinator launcher refuses .env files in its working directory or ancestors to prevent accidental storage settings; place the round outside that tree. Run both scripts with <code>--dry-run</code> to inspect paths without starting processes.</p></details>
+</section>
+<footer>Checked against this branch's configuration, Ledger identity helper, payout specification, Tauri bundle configuration, and operations runbooks. The seeder interface follows the shared tester-kit brief; integration requires the companion seed implementation.</footer>
+</main></body></html>

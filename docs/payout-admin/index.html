@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payout Admin testing</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body><main>
+<p class="eyebrow">Payout Administrator · regtest test round</p>
+<h1>Testing the Payout Administrator app</h1>
+<p class="lede">Three guides for a shared test round on regtest. Read them in this order.</p>
+<ol class="steps">
+<li><a href="setup.html"><strong>Build and run</strong></a>. Compile the coordinator and the desktop app, start your own regtest node, seed the chain and sign in.</li>
+<li><a href="guide.html"><strong>Feature guide</strong></a>. Every feature of the Payout Administrator UI, in the order you meet it, tied to the PRD requirement it implements, with what the app must refuse.</li>
+<li><a href="ledger-tests.html"><strong>Physical Ledger tests</strong></a>. Every flow the PRD requires on the device, as test cases with the expected screens and a result sheet (<a href="ledger-results.csv">ledger-results.csv</a>).</li>
+</ol>
+<div class="note"><p>Default files for the round are in <a href="kit/README.md">kit/</a>: the host's and each tester's <code>bitcoin.conf</code>, the coordinator environment, launcher scripts and a roster template.</p></div>
+<footer>Branch <code>feat/payout-admin</code>, 2026-11-16.</footer>
+</main></body></html>

@@ -1,0 +1,19 @@
+# Regtest roster template. Replace ALL placeholders with each tester's ledger_identity output.
+# One entry per tester, in agreed order. Never put seeds or private keys in this file.
+# The seeder makes params.toml from these keys; xpub/0/0 must match params in this order.
+network = "regtest"
+
+[[admins]]
+label = "Tester A"
+fingerprint = "REPLACE_WITH_8_HEX_CHARS"
+xpub = "REPLACE_WITH_ACCOUNT_XPUB_AT_m/86'/1'/73'"
+
+[[admins]]
+label = "Tester B"
+fingerprint = "REPLACE_WITH_8_HEX_CHARS"
+xpub = "REPLACE_WITH_ACCOUNT_XPUB_AT_m/86'/1'/73'"
+
+[[admins]]
+label = "Tester C"
+fingerprint = "REPLACE_WITH_8_HEX_CHARS"
+xpub = "REPLACE_WITH_ACCOUNT_XPUB_AT_m/86'/1'/73'"

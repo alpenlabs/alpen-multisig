@@ -1,0 +1,1764 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Physical Ledger tests</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<main>
+<p class="eyebrow">Payout Administrator · regtest · physical Ledger</p>
+<h1>Physical Ledger test guide</h1>
+<p class="lede">Run each case on real hardware. Compare the device with the app before approving. Reference images are emulator captures, never evidence of a physical pass.</p>
+<section id="rules">
+<h2>Rules before starting</h2>
+<div class="warn">
+<ul>
+<li>Use regtest only and the device’s own existing seed. Never reset it or load the Speculos seed. Close Ledger Live and other USB clients.</li>
+<li>Unlock and open Bitcoin Test before connecting. Use 2.4.6 or later. Test 2.4.6 and 2.5.1 on compatible devices separately. Record unsupported combinations as BLOCKED. Do not assume a later version has identical screens; the app flags versions beyond those checked.</li>
+<li>
+<b>Never enter the PIN while the desktop app or a test is talking to the Ledger.</b> If it locks, wait for the request to fail or stop the app. Unlock only after device I/O stops. Then reopen Bitcoin Test, reconnect and review again.</li>
+<li>Before long tests, set a longer PIN-lock interval while idle, or keep the device awake with occasional button activity. Never use blind approval. Restore the previous lock setting after testing.</li>
+<li>Record device model, device OS, Bitcoin Test app version, host OS, desktop commit/build, date, tester, claim count, covenants and timings. Photograph every screen that differs from this guide and the app checklist. Never photograph a PIN or seed.</li>
+<li>Approve only when every value is readable and matches. A blank value on a physical device means reject. Navigate with left/right; on Nano X / S+ both buttons approve the displayed action. Other models may use different controls.</li>
+</ul>
+</div>
+</section>
+<nav class="toc" aria-label="Contents">
+<ul>
+<li>
+<a href="#rules">Rules</a>
+</li>
+<li>
+<a href="#setup">Setup</a>
+</li>
+<li>
+<a href="#L01">L01: Open app and version check</a>
+</li>
+<li>
+<a href="#L02">L02: Admin ID verify before and after sign-in</a>
+</li>
+<li>
+<a href="#L03">L03: Sign-in challenge: approve</a>
+</li>
+<li>
+<a href="#L04">L04: Sign-in challenge: reject</a>
+</li>
+<li>
+<a href="#L05">L05: Sign-in challenge: unplug</a>
+</li>
+<li>
+<a href="#L06">L06: Receive address on Ledger</a>
+</li>
+<li>
+<a href="#L07">L07: Register a payout wallet once</a>
+</li>
+<li>
+<a href="#L08">L08: Payout with 1 claim</a>
+</li>
+<li>
+<a href="#L09">L09: Payout with 2 claims</a>
+</li>
+<li>
+<a href="#L10">L10: Payout with 4 claims</a>
+</li>
+<li>
+<a href="#L11">L11: Payout with 8 claims</a>
+</li>
+<li>
+<a href="#L12">L12: Payout with 90 claims</a>
+</li>
+<li>
+<a href="#L13">L13: Payout across 2 covenants</a>
+</li>
+<li>
+<a href="#L14">L14: Payout across 3 covenants</a>
+</li>
+<li>
+<a href="#L15">L15: Reject at every payout pass</a>
+</li>
+<li>
+<a href="#L16">L16: Unplug or lock during payout signing</a>
+</li>
+<li>
+<a href="#L17">L17: Sign another admin’s pending payout</a>
+</li>
+<li>
+<a href="#L18">L18: Admin Wallet send: confirm</a>
+</li>
+<li>
+<a href="#L19">L19: Admin Wallet send: reject</a>
+</li>
+<li>
+<a href="#L20">L20: Admin Wallet Max send</a>
+</li>
+<li>
+<a href="#L21">L21: Fee bump of an own send</a>
+</li>
+<li>
+<a href="#L22">L22: Blank value means reject</a>
+</li>
+<li>
+<a href="#L23">L23: Split payout batch</a>
+</li>
+<li>
+<a href="#report">Reporting results</a>
+</li>
+</ul>
+</nav>
+<section id="setup">
+<h2>Setup and evidence baseline</h2>
+<p>Follow <a href="setup.html">setup.html</a> for binaries, Bitcoin Core with txindex, coordinator, regtest deployment built from your Ledger’s public identity, roster, confirmed funding and report seeding. Follow <a href="guide.html">guide.html</a> for UI navigation. This guide starts no Docker services. Run only one hardware client at a time.</p>
+<p>For supplemental hardware-only multi-covenant coverage, the existing <code>e2e_payout_claims_matrix</code> harness can use the physical Ledger’s identity unchanged. With the desktop closed, Bitcoin Test ready and <code>LEDGER_SPECULOS_URL</code> unset, a tester can run <code>LEDGER_PHYSICAL=1 CLAIM_COUNT=6 COVENANTS=3 cargo test -p alpen-multisig-e2e-tests --test e2e_payout_claims_matrix -- --nocapture</code>. Use COVENANTS=2 for two covenants. It starts isolated Bitcoin Core and coordinator processes, not Docker. It directly funds connectors, so this is supplemental device evidence, not a substitute for the UI/report-verification cases. Attach its MATRIX_RESULT output separately.</p>
+<p>Prepare independent fresh claims and funded coins for each success case. The seeder adds new claims on every run with the same output directory: set <code>PAYOUT_SEED_CLAIMS</code> to the number you need, for example <code>PAYOUT_SEED_CLAIMS=120</code> before L08 to L12 (1 + 2 + 4 + 8 + 90 claims plus spares), and paste the new <code>reports.json</code>. A spent claim cannot be reused. Keep the same app profile for registration-cache tests. Record policy names and covenant membership. The seed count alone does not prove multiple covenants: require a fixture whose params and reports actually span them.</p>
+<p>Regtest uses path <code>m/86'/1'/73'</code> and unit TEST. Bitcoin Test displays testnet address encodings (tb1… for witness outputs); the app uses bcrt1… and supplies the device form for comparison. Compare the full device form, not just a changed prefix or checksum. The backend checks address equivalence. Example amounts, nonces, keys and policy IDs in the images are not your fixture values.</p>
+<p>The current spec records a hand run on 2026-11-13: Nano X, OS 2.7.0, Bitcoin Test 2.4.6, sign-in, Show on Ledger and 1, 4, 10, 20 and 90 claims accepted by Core. Older runbook §6/§8 and compliance M2 still say pending. The current spec supersedes those status statements. Several covenants, rejection and unplug remain unverified physically there. Emulator coverage includes Nano X and Nano S+, 2.4.6 and 2.5.1. Do not prefill any new physical result as PASS.</p>
+<div class="note">
+<b>External inputs are expected only in payout passes.</b> Each pass signs one policy’s inputs. Other covenants and fee coins are external in a claim pass; all claims are external in the fee pass. Fees is always the whole transaction fee, not an extra fee per pass. On 2.5+, each claim contributes 330 sat to its covenant’s You spend. The fee pass may say You receive when claim value exceeds the fee. On 2.4.x it is a 0 TEST self-transfer. Compare actual checklist values before choosing Continue anyway.</div>
+</section>
+<section id="L01">
+<h2>L01. Open app and version check</h2>
+<p>
+<span class="req">PRD 06 §3.b.i, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Ledger idle, own seed unchanged; compatible versions available on test devices. Do not downgrade a device just to obtain an old version.</p>
+<ol class="steps">
+<li>Close Ledger Live. Unlock while the desktop is idle. Open Bitcoin Test 2.4.6 or later and click Connect Ledger. Record the reported version.</li>
+<li>Disconnect in the UI. Repeat with the wrong app open, then an available Bitcoin Test older than 2.4.6. If no old app is available, mark that variant BLOCKED.</li>
+<li>Sign in with the supported app. When idle, close Bitcoin Test, then request a payout checklist. Reopen it and reconnect. If testing a different version, sign in again.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Supported app: Bitcoin Test ready screen; no signing approval during version detection. Wrong or closed app: no valid payout review. Too old: no signing request. Ready-screen wording depends on device firmware.</p>
+<p>
+<b>App at the same time.</b> Connect reads GET_VERSION. Wrong app asks to open Bitcoin Test. Too old asks to update to 2.4.6 or later. Closed app produces an error. A changed version before review or signing requires a new sign-in.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Supported version matches the device.</li>
+<li>Wrong, old and closed-app variants never sign.</li>
+<li>Recovery succeeds; a different version does not use the old checklist.</li>
+</ul>
+<div class="note">
+<b>Result L01</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L02">
+<h2>L02. Admin ID verify before and after sign-in</h2>
+<p><span class="status open">Accepted deviation D5: blocked PRD test</span></p>
+<p>
+<span class="req">PRD 06 §3.b.ii.a, §3.c.i, §4.a</span>
+</p>
+<p>
+<b>Preconditions.</b> Payout Administrator selected. This is a known requirement gap (spec D5).</p>
+<ol class="steps">
+<li>Inspect the payout connection screen for Verify, Admin ID, certificate and show-on-device.</li>
+<li>Sign in and inspect Block Payouts for the same controls. Record the missing controls.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>None. This branch has no Payout Admin ID verification or certificate device flow. Do not substitute the governance P2WPKH identity or the rotating receive address.</p>
+<p>
+<b>App at the same time.</b> Payout identity is used internally at m/86'/1'/73'/0/0, but there is no payout Admin ID card or Verify button.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Record BLOCKED / accepted deviation D5, not PASS for PRD compliance.</li>
+<li>Capture the UI absence before and after login.</li>
+</ul>
+<div class="note">
+<b>Result L02</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L03">
+<h2>L03. Sign-in challenge: approve</h2>
+<p>
+<span class="req">PRD 06 §3.c, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Signed out; matching regtest params and roster; Bitcoin Test open.</p>
+<ol class="steps">
+<li>Click Connect Ledger and read the sign-in checklist.</li>
+<li>Click Sign in on Ledger. Compare every message page with the app, then approve Sign message.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Review message → Path 86'/1'/73'/0/0 → Message (1/n) through (n/n): Strata Session Authentication v1, Role: payout_admin, Challenge and the complete nonce → Sign message → Message signed.</p>
+<p>
+<b>App at the same time.</b>  The sign-in checklist shows the full message and path; successful approval opens Block Payouts with admin, quorum and Ledger app version.</p>
+<details>
+<summary>Reference captures 2.4.6 (Speculos, not physical evidence)</summary>
+<div class="device-grid">
+<figure class="dev">
+<img src="img/device-2.4.6/002.png" alt="Review message" loading="lazy">
+<figcaption>002: Review message</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/003.png" alt="Path
+86&#x27;/1&#x27;/73&#x27;/0/0" loading="lazy">
+<figcaption>003: Path
+86&#x27;/1&#x27;/73&#x27;/0/0</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/004.png" alt="Message (1/3)
+Strata Session
+Authentication v1
+| Role: payout_admin |" loading="lazy">
+<figcaption>004: Message (1/3)
+Strata Session
+Authentication v1
+| Role: payout_admin |</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/005.png" alt="Message (2/3)
+Challenge:
+b4d4bf811235f28c89
+25da9e071bbd950504" loading="lazy">
+<figcaption>005: Message (2/3)
+Challenge:
+b4d4bf811235f28c89
+25da9e071bbd950504</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/006.png" alt="Message (3/3)
+95115e2cacb45e9205
+348312a62d" loading="lazy">
+<figcaption>006: Message (3/3)
+95115e2cacb45e9205
+348312a62d</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/007.png" alt="Sign message" loading="lazy">
+<figcaption>007: Sign message</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/008.png" alt="Message signed" loading="lazy">
+<figcaption>008: Message signed</figcaption>
+</figure>
+</div>
+</details>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Only the roster member gains access. Also attempt Connect with a separate test device whose identity is absent from the roster: the app must refuse access, with no signing authorization. Do not change any device’s seed for this variant.</li>
+<li>Path and every nonce character are readable and match.</li>
+</ul>
+<div class="note">
+<b>Result L03</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L04">
+<h2>L04. Sign-in challenge: reject</h2>
+<p>
+<span class="req">PRD 06 §3.c, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Signed out; matching regtest params and roster; Bitcoin Test open.</p>
+<ol class="steps">
+<li>Click Connect Ledger and read the sign-in checklist.</li>
+<li>Click Sign in on Ledger. Navigate to the device rejection action instead of approving Sign message. Retry with a fresh review.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Review message → Path 86'/1'/73'/0/0 → Message (1/n) through (n/n): Strata Session Authentication v1, Role: payout_admin, Challenge and the complete nonce → Sign message → Message signed.</p>
+<p>
+<b>App at the same time.</b>  The sign-in error stays visible; the protected payout view does not open.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Rejection creates no session; retry succeeds.</li>
+<li>Path and every nonce character are readable and match.</li>
+</ul>
+<div class="note">
+<b>Result L04</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L05">
+<h2>L05. Sign-in challenge: unplug</h2>
+<p>
+<span class="req">PRD 06 §3.c, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Signed out; matching regtest params and roster; Bitcoin Test open.</p>
+<ol class="steps">
+<li>Click Connect Ledger and read the sign-in checklist.</li>
+<li>Click Sign in on Ledger. Unplug at a message page before approval. Wait for the error before reconnecting and unlocking. Request a fresh review and retry.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Review message → Path 86'/1'/73'/0/0 → Message (1/n) through (n/n): Strata Session Authentication v1, Role: payout_admin, Challenge and the complete nonce → Sign message → Message signed.</p>
+<p>
+<b>App at the same time.</b>  A device error is shown; no successful session is created.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>No session after unplug; reconnect and sign-in recover.</li>
+<li>Path and every nonce character are readable and match.</li>
+</ul>
+<div class="note">
+<b>Result L05</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L06">
+<h2>L06. Receive address on Ledger</h2>
+<p>
+<span class="req">PRD 06 §4.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Signed in; Admin Wallet open; no other device operation active.</p>
+<ol class="steps">
+<li>Copy the receive address and record its device form. Click Show on Ledger.</li>
+<li>Compare all address pages and Confirm. Repeat with reject and confirm that success is not reported.</li>
+<li>Receive regtest funds and mine a confirmation using setup.html. Wait for wallet refresh, then verify the rotated address again.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Verify bitcoin address → Address (1/n) through (n/n): complete tb1p… address → Confirm → Address verified.</p>
+<p>
+<b>App at the same time.</b> Receive text and QR show the first unused regtest address. The device shows its testnet encoding. After confirmation the app says “The Ledger shows the same address.” A new block triggers wallet refresh (tip checked every 15 seconds).</p>
+<details>
+<summary>Reference captures 2.4.6 (Speculos, not physical evidence)</summary>
+<div class="device-grid">
+<figure class="dev">
+<img src="img/device-2.4.6/010.png" alt="Verify bitcoin
+address" loading="lazy">
+<figcaption>010: Verify bitcoin
+address</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/011.png" alt="Address (1/2)
+tb1pynulxk22nu5ju83
+z7rukw44plfemnhle2
+vwn78dsdem29cz5ujj" loading="lazy">
+<figcaption>011: Address (1/2)
+tb1pynulxk22nu5ju83
+z7rukw44plfemnhle2
+vwn78dsdem29cz5ujj</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/012.png" alt="Address (2/2)
+std4jmg" loading="lazy">
+<figcaption>012: Address (2/2)
+std4jmg</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/013.png" alt="Confirm" loading="lazy">
+<figcaption>013: Confirm</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/014.png" alt="Address verified" loading="lazy">
+<figcaption>014: Address verified</figcaption>
+</figure>
+</div>
+</details>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Every character matches the app’s device form.</li>
+<li>Rejected verification does not report success.</li>
+<li>After confirmed receive, the new unused address also verifies.</li>
+</ul>
+<div class="note">
+<b>Result L06</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L07">
+<h2>L07. Register a payout wallet once</h2>
+<p>
+<span class="req">PRD 06 §3.b.iv, §6.d.vi</span>
+</p>
+<p>
+<b>Preconditions.</b> Fresh covenant policy for this Ledger and app profile; valid reports and confirmed fee funds.</p>
+<ol class="steps">
+<li>Plan one claim and open the Ledger checklist. Confirm.</li>
+<li>Compare account name, policy, bridge key and every admin key page. Approve Register account, then complete claim and fee passes using L08.</li>
+<li>Create a second payout with fresh claims of the same covenant. Keep the same device and app data. Restart the desktop and review again.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Review account to register → Account name: Payout &lt;id&gt; → Wallet policy: tr(@0/**,multi_a(k,@1/**,…,@n/**)) → Review co-signer public keys → Their key@0 (bridge synthetic tpub, all pages) → Our key@i and Their key@j in roster order, all pages of [fp/86'/1'/73']tpub… → Register account → Account registered.</p>
+</td>
+<td>
+<p>Review account to register → Account name: Payout &lt;id&gt; → Primary spending path: Main path: spendable by @0 → Spending path #1: Any k of @1, …, @n must sign → Wallet policy: tr(@0/**,multi_a(k,@1/**,…,@n/**)) → Review co-signer public keys → Their key@0 (bridge synthetic tpub, all pages) → Our key@i and Their key@j in roster order, all pages of [fp/86'/1'/73']tpub… → Register account → Account registered.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> Checklist names each key owner. Registration appears only without a cached policy HMAC. The app checks policy address 0 equals the connector silently; this is not another visible address confirmation.</p>
+<details>
+<summary>Reference captures 2.4.6 (Speculos, not physical evidence)</summary>
+<div class="device-grid">
+<figure class="dev">
+<img src="img/device-2.4.6/016.png" alt="Review account
+to register" loading="lazy">
+<figcaption>016: Review account
+to register</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/017.png" alt="Account name
+Payout 5df99e" loading="lazy">
+<figcaption>017: Account name
+Payout 5df99e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/018.png" alt="Wallet policy
+tr(@0/**,multi_
+a(2,@1/**,@2/**,@3/*
+*))" loading="lazy">
+<figcaption>018: Wallet policy
+tr(@0/**,multi_
+a(2,@1/**,@2/**,@3/*
+*))</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/019.png" alt="Review co-signer
+public keys" loading="lazy">
+<figcaption>019: Review co-signer
+public keys</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/020.png" alt="Their key@0 (1/3)
+tpubD6NzVbkrYhZ4X
+gHkCEtfpuZPJDLaLPx
+u5ZBEtAbub9GcUX1m" loading="lazy">
+<figcaption>020: Their key@0 (1/3)
+tpubD6NzVbkrYhZ4X
+gHkCEtfpuZPJDLaLPx
+u5ZBEtAbub9GcUX1m</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/021.png" alt="Their key@0 (2/3)
+TS2t3eCnBZPRzVsbJx
+8qEt8jjekGHRwcYgZD
+wfqy2xjoskbDiDVK2e" loading="lazy">
+<figcaption>021: Their key@0 (2/3)
+TS2t3eCnBZPRzVsbJx
+8qEt8jjekGHRwcYgZD
+wfqy2xjoskbDiDVK2e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/022.png" alt="Their key@0 (3/3)
+XzE2e" loading="lazy">
+<figcaption>022: Their key@0 (3/3)
+XzE2e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/023.png" alt="Our key@1 (1/3)
+[f5acc2fd/86&#x27;/1&#x27;/73&#x27;]tp
+ubDDKYE6BREvDvdY
+XBWwwm2XC711QuN" loading="lazy">
+<figcaption>023: Our key@1 (1/3)
+[f5acc2fd/86&#x27;/1&#x27;/73&#x27;]tp
+ubDDKYE6BREvDvdY
+XBWwwm2XC711QuN</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/024.png" alt="Our key@1 (2/3)
+LNJDwC5SHtNsyhj72p
+rQxCZ4BBgsiAD5A7gF
+SkYkQ9kuFGmFdhwc" loading="lazy">
+<figcaption>024: Our key@1 (2/3)
+LNJDwC5SHtNsyhj72p
+rQxCZ4BBgsiAD5A7gF
+SkYkQ9kuFGmFdhwc</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/025.png" alt="Our key@1 (3/3)
+yUmExNMtZArhb1BrA
+Wxq39aLCj" loading="lazy">
+<figcaption>025: Our key@1 (3/3)
+yUmExNMtZArhb1BrA
+Wxq39aLCj</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/026.png" alt="Their key@2 (1/3)
+[8dfc9b34/86&#x27;/1&#x27;/73&#x27;]t
+pubDCBTMav4AWLK
+4iTbcLT3kYM4UL1rE" loading="lazy">
+<figcaption>026: Their key@2 (1/3)
+[8dfc9b34/86&#x27;/1&#x27;/73&#x27;]t
+pubDCBTMav4AWLK
+4iTbcLT3kYM4UL1rE</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/027.png" alt="Their key@2 (2/3)
+42MaL9EhpMiVQKgA
+KRMUcpPHVo4nxmP
+Z9aWoADeHPuvFRmr" loading="lazy">
+<figcaption>027: Their key@2 (2/3)
+42MaL9EhpMiVQKgA
+KRMUcpPHVo4nxmP
+Z9aWoADeHPuvFRmr</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/028.png" alt="Their key@2 (3/3)
+3RNKuwB4VnUK9Cf
+Mx2NzXCfYKoyvtbd" loading="lazy">
+<figcaption>028: Their key@2 (3/3)
+3RNKuwB4VnUK9Cf
+Mx2NzXCfYKoyvtbd</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/029.png" alt="Their key@3 (1/3)
+[56c4fac3/86&#x27;/1&#x27;/73&#x27;]tp
+ubDCW6EgwMzWCsg
+Zg7nn9aGDFxivwDaS" loading="lazy">
+<figcaption>029: Their key@3 (1/3)
+[56c4fac3/86&#x27;/1&#x27;/73&#x27;]tp
+ubDCW6EgwMzWCsg
+Zg7nn9aGDFxivwDaS</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/030.png" alt="Their key@3 (2/3)
+1WRTfLhK8RPzhiFAg
+2drTZw1EjyLDePpjAL
+5jAmGVmXYL7cARrsp" loading="lazy">
+<figcaption>030: Their key@3 (2/3)
+1WRTfLhK8RPzhiFAg
+2drTZw1EjyLDePpjAL
+5jAmGVmXYL7cARrsp</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/031.png" alt="Their key@3 (3/3)
+y9ydGKXKAKqvydr6r
+hexLuQN2" loading="lazy">
+<figcaption>031: Their key@3 (3/3)
+y9ydGKXKAKqvydr6r
+hexLuQN2</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/032.png" alt="Register account" loading="lazy">
+<figcaption>032: Register account</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/033.png" alt="Account registered" loading="lazy">
+<figcaption>033: Account registered</figcaption>
+</figure>
+</div>
+</details>
+<details>
+<summary>Reference captures 2.5.1 (Speculos, not physical evidence)</summary>
+<div class="device-grid">
+<figure class="dev">
+<img src="img/device-2.5.1/016.png" alt="Review account
+to register" loading="lazy">
+<figcaption>016: Review account
+to register</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/017.png" alt="Account name
+Payout 5df99e" loading="lazy">
+<figcaption>017: Account name
+Payout 5df99e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/018.png" alt="Primary...ing path
+Main path: spendable
+by @0" loading="lazy">
+<figcaption>018: Primary...ing path
+Main path: spendable
+by @0</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/019.png" alt="Spending path #1
+Any 2 of @1, @2 and
+@3 must sign" loading="lazy">
+<figcaption>019: Spending path #1
+Any 2 of @1, @2 and
+@3 must sign</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/020.png" alt="Wallet policy
+tr(@0/**,multi_
+a(2,@1/**,@2/**,@3/*
+*))" loading="lazy">
+<figcaption>020: Wallet policy
+tr(@0/**,multi_
+a(2,@1/**,@2/**,@3/*
+*))</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/021.png" alt="Review co-signer
+public keys" loading="lazy">
+<figcaption>021: Review co-signer
+public keys</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/022.png" alt="Their key@0 (1/3)
+tpubD6NzVbkrYhZ4X
+gHkCEtfpuZPJDLaLPx
+u5ZBEtAbub9GcUX1m" loading="lazy">
+<figcaption>022: Their key@0 (1/3)
+tpubD6NzVbkrYhZ4X
+gHkCEtfpuZPJDLaLPx
+u5ZBEtAbub9GcUX1m</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/023.png" alt="Their key@0 (2/3)
+TS2t3eCnBZPRzVsbJx
+8qEt8jjekGHRwcYgZD
+wfqy2xjoskbDiDVK2e" loading="lazy">
+<figcaption>023: Their key@0 (2/3)
+TS2t3eCnBZPRzVsbJx
+8qEt8jjekGHRwcYgZD
+wfqy2xjoskbDiDVK2e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/024.png" alt="Their key@0 (3/3)
+XzE2e" loading="lazy">
+<figcaption>024: Their key@0 (3/3)
+XzE2e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/025.png" alt="Our key@1 (1/3)
+[f5acc2fd/86&#x27;/1&#x27;/73&#x27;]tp
+ubDDKYE6BREvDvdY
+XBWwwm2XC711QuN" loading="lazy">
+<figcaption>025: Our key@1 (1/3)
+[f5acc2fd/86&#x27;/1&#x27;/73&#x27;]tp
+ubDDKYE6BREvDvdY
+XBWwwm2XC711QuN</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/026.png" alt="Our key@1 (2/3)
+LNJDwC5SHtNsyhj72p
+rQxCZ4BBgsiAD5A7gF
+SkYkQ9kuFGmFdhwc" loading="lazy">
+<figcaption>026: Our key@1 (2/3)
+LNJDwC5SHtNsyhj72p
+rQxCZ4BBgsiAD5A7gF
+SkYkQ9kuFGmFdhwc</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/027.png" alt="Our key@1 (3/3)
+yUmExNMtZArhb1BrA
+Wxq39aLCj" loading="lazy">
+<figcaption>027: Our key@1 (3/3)
+yUmExNMtZArhb1BrA
+Wxq39aLCj</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/028.png" alt="Their key@2 (1/3)
+[8dfc9b34/86&#x27;/1&#x27;/73&#x27;]t
+pubDCBTMav4AWLK
+4iTbcLT3kYM4UL1rE" loading="lazy">
+<figcaption>028: Their key@2 (1/3)
+[8dfc9b34/86&#x27;/1&#x27;/73&#x27;]t
+pubDCBTMav4AWLK
+4iTbcLT3kYM4UL1rE</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/029.png" alt="Their key@2 (2/3)
+42MaL9EhpMiVQKgA
+KRMUcpPHVo4nxmP
+Z9aWoADeHPuvFRmr" loading="lazy">
+<figcaption>029: Their key@2 (2/3)
+42MaL9EhpMiVQKgA
+KRMUcpPHVo4nxmP
+Z9aWoADeHPuvFRmr</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/030.png" alt="Their key@2 (3/3)
+3RNKuwB4VnUK9Cf
+Mx2NzXCfYKoyvtbd" loading="lazy">
+<figcaption>030: Their key@2 (3/3)
+3RNKuwB4VnUK9Cf
+Mx2NzXCfYKoyvtbd</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/031.png" alt="Their key@3 (1/3)
+[56c4fac3/86&#x27;/1&#x27;/73&#x27;]tp
+ubDCW6EgwMzWCsg
+Zg7nn9aGDFxivwDaS" loading="lazy">
+<figcaption>031: Their key@3 (1/3)
+[56c4fac3/86&#x27;/1&#x27;/73&#x27;]tp
+ubDCW6EgwMzWCsg
+Zg7nn9aGDFxivwDaS</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/032.png" alt="Their key@3 (2/3)
+1WRTfLhK8RPzhiFAg
+2drTZw1EjyLDePpjAL
+5jAmGVmXYL7cARrsp" loading="lazy">
+<figcaption>032: Their key@3 (2/3)
+1WRTfLhK8RPzhiFAg
+2drTZw1EjyLDePpjAL
+5jAmGVmXYL7cARrsp</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/033.png" alt="Their key@3 (3/3)
+y9ydGKXKAKqvydr6r
+hexLuQN2" loading="lazy">
+<figcaption>033: Their key@3 (3/3)
+y9ydGKXKAKqvydr6r
+hexLuQN2</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/034.png" alt="Register account" loading="lazy">
+<figcaption>034: Register account</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/035.png" alt="Account registered" loading="lazy">
+<figcaption>035: Account registered</figcaption>
+</figure>
+</div>
+</details>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>First registration matches the deployment exactly.</li>
+<li>Second payout omits registration, including after desktop restart.</li>
+<li>Claim and fee passes still appear.</li>
+</ul>
+<div class="note">
+<b>Result L07</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L08">
+<h2>L08. Payout with 1 claim</h2>
+<p>
+<span class="req">PRD 06 §6.d.ii–vi, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> 1 fresh valid claims from one covenant, 2-of-3 deployment, confirmed unreserved Admin Wallet funds. Use setup.html to seed the required count.</p>
+<ol class="steps">
+<li>Paste reports and retain exactly 1 claim inputs. Set a fee rate, record txid, size, fee, input total and change. Ensure the plan contains one transaction.</li>
+<li>Open the checklist; record any registration and perform L07 if needed. Click Confirm.</li>
+<li>Compare and approve the claim pass, then the fee pass below. Measure each loading/signing interval.</li>
+<li>Check Pending for your signature. Have another admin sign to quorum, then verify node acceptance and Past status.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<h3>Claim pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h3>Fee pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> The checklist lists this transaction’s actual values, fee and destination. Pending shows Signed and quorum progress; at quorum the app broadcasts. Failed broadcast stays Pending with Retry broadcast.</p>
+<p>Timing baseline for Nano X 2.4.6: claim loading 4 + 2.0 × 1 = 6 s; claim signing 1.9 × 1 = 1.9 s; fee-pass loading 3 + 1.3 × 1 = 4.3 s. Excludes human review, registration and final fee signing. Record measured times, not a timeout pass/fail threshold.</p>
+<details>
+<summary>Reference captures 2.4.6 (Speculos, not physical evidence)</summary>
+<div class="device-grid">
+<figure class="dev">
+<img src="img/device-2.4.6/035.png" alt="Security risk" loading="lazy">
+<figcaption>035: Security risk</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/036.png" alt="Security risk
+There are external
+inputs
+Reject if not sure" loading="lazy">
+<figcaption>036: Security risk
+There are external
+inputs
+Reject if not sure</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/037.png" alt="Continue anyway" loading="lazy">
+<figcaption>037: Continue anyway</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/038.png" alt="Review transaction
+to send bitcoin" loading="lazy">
+<figcaption>038: Review transaction
+to send bitcoin</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/039.png" alt="From
+Payout 5df99e" loading="lazy">
+<figcaption>039: From
+Payout 5df99e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/040.png" alt="Amount" loading="lazy">
+<figcaption>040: Amount</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/041.png" alt="To" loading="lazy">
+<figcaption>041: To</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/042.png" alt="Fees" loading="lazy">
+<figcaption>042: Fees</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/043.png" alt="Sign transaction" loading="lazy">
+<figcaption>043: Sign transaction</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/044.png" alt="Signing transaction" loading="lazy">
+<figcaption>044: Signing transaction</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/045.png" alt="Transaction signed" loading="lazy">
+<figcaption>045: Transaction signed</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/046.png" alt="Security risk" loading="lazy">
+<figcaption>046: Security risk</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/047.png" alt="Security risk
+There are external
+inputs
+Reject if not sure" loading="lazy">
+<figcaption>047: Security risk
+There are external
+inputs
+Reject if not sure</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/048.png" alt="Continue anyway" loading="lazy">
+<figcaption>048: Continue anyway</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/049.png" alt="Review transaction
+to send bitcoin" loading="lazy">
+<figcaption>049: Review transaction
+to send bitcoin</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/050.png" alt="Amount
+0 TEST (self-transfer)" loading="lazy">
+<figcaption>050: Amount
+0 TEST (self-transfer)</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/051.png" alt="Fees" loading="lazy">
+<figcaption>051: Fees</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/052.png" alt="Sign transaction" loading="lazy">
+<figcaption>052: Sign transaction</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.4.6/053.png" alt="Transaction signed" loading="lazy">
+<figcaption>053: Transaction signed</figcaption>
+</figure>
+</div>
+</details>
+<details>
+<summary>Reference captures 2.5.1 (Speculos, not physical evidence)</summary>
+<div class="device-grid">
+<figure class="dev">
+<img src="img/device-2.5.1/037.png" alt="Security risk
+There are external
+inputs
+Reject if not sure" loading="lazy">
+<figcaption>037: Security risk
+There are external
+inputs
+Reject if not sure</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/038.png" alt="Continue anyway" loading="lazy">
+<figcaption>038: Continue anyway</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/039.png" alt="Review transaction
+to send bitcoin" loading="lazy">
+<figcaption>039: Review transaction
+to send bitcoin</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/040.png" alt="From account
+Payout 5df99e" loading="lazy">
+<figcaption>040: From account
+Payout 5df99e</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/041.png" alt="Amount
+0.00039895 TEST" loading="lazy">
+<figcaption>041: Amount
+0.00039895 TEST</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/042.png" alt="To (1/2)
+tb1pzsd8lcfa3n93gc9
+mjuqgzkalm9nr0q9hv
+xdkahkvc2dys6mgmc" loading="lazy">
+<figcaption>042: To (1/2)
+tb1pzsd8lcfa3n93gc9
+mjuqgzkalm9nr0q9hv
+xdkahkvc2dys6mgmc</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/043.png" alt="To (2/2)
+ysclslsg" loading="lazy">
+<figcaption>043: To (2/2)
+ysclslsg</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/044.png" alt="External amounts
+0.0004 TEST" loading="lazy">
+<figcaption>044: External amounts
+0.0004 TEST</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/045.png" alt="You spend
+0.0000099 TEST" loading="lazy">
+<figcaption>045: You spend
+0.0000099 TEST</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/046.png" alt="Fees
+0.00001095 TEST" loading="lazy">
+<figcaption>046: Fees
+0.00001095 TEST</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/047.png" alt="Sign transaction" loading="lazy">
+<figcaption>047: Sign transaction</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/048.png" alt="Signing transaction" loading="lazy">
+<figcaption>048: Signing transaction</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/049.png" alt="Transaction signed" loading="lazy">
+<figcaption>049: Transaction signed</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/050.png" alt="Security risk" loading="lazy">
+<figcaption>050: Security risk</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/051.png" alt="Security risk
+There are external
+inputs
+Reject if not sure" loading="lazy">
+<figcaption>051: Security risk
+There are external
+inputs
+Reject if not sure</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/052.png" alt="Continue anyway" loading="lazy">
+<figcaption>052: Continue anyway</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/053.png" alt="Review transaction
+to send bitcoin" loading="lazy">
+<figcaption>053: Review transaction
+to send bitcoin</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/054.png" alt="External amounts
+0.0000099 TEST" loading="lazy">
+<figcaption>054: External amounts
+0.0000099 TEST</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/055.png" alt="You spend
+0.00000105 TEST" loading="lazy">
+<figcaption>055: You spend
+0.00000105 TEST</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/056.png" alt="Fees
+0.00001095 TEST" loading="lazy">
+<figcaption>056: Fees
+0.00001095 TEST</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/057.png" alt="Sign transaction" loading="lazy">
+<figcaption>057: Sign transaction</figcaption>
+</figure>
+<figure class="dev">
+<img src="img/device-2.5.1/058.png" alt="Transaction signed" loading="lazy">
+<figcaption>058: Transaction signed</figcaption>
+</figure>
+</div>
+</details>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>All values are populated and agree with the checklist.</li>
+<li>One claim pass plus one fee pass, without crash, lock or 0x6a80.</li>
+<li>Valid signatures stored; Core accepts the completed transaction.</li>
+</ul>
+<div class="note">
+<b>Result L08</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L09">
+<h2>L09. Payout with 2 claims</h2>
+<p>
+<span class="req">PRD 06 §6.d.ii–vi, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> 2 fresh valid claims from one covenant, 2-of-3 deployment, confirmed unreserved Admin Wallet funds. Use setup.html to seed the required count.</p>
+<ol class="steps">
+<li>Paste reports and retain exactly 2 claim inputs. Set a fee rate, record txid, size, fee, input total and change. Ensure the plan contains one transaction.</li>
+<li>Open the checklist; record any registration and perform L07 if needed. Click Confirm.</li>
+<li>Compare and approve the claim pass, then the fee pass below. Measure each loading/signing interval.</li>
+<li>Check Pending for your signature. Have another admin sign to quorum, then verify node acceptance and Past status.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<h3>Claim pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h3>Fee pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> The checklist lists this transaction’s actual values, fee and destination. Pending shows Signed and quorum progress; at quorum the app broadcasts. Failed broadcast stays Pending with Retry broadcast.</p>
+<p>Timing baseline for Nano X 2.4.6: claim loading 4 + 2.0 × 2 = 8 s; claim signing 1.9 × 2 = 3.8 s; fee-pass loading 3 + 1.3 × 2 = 5.6 s. Excludes human review, registration and final fee signing. Record measured times, not a timeout pass/fail threshold.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>All values are populated and agree with the checklist.</li>
+<li>One claim pass plus one fee pass, without crash, lock or 0x6a80.</li>
+<li>Valid signatures stored; Core accepts the completed transaction.</li>
+</ul>
+<div class="note">
+<b>Result L09</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L10">
+<h2>L10. Payout with 4 claims</h2>
+<p>
+<span class="req">PRD 06 §6.d.ii–vi, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> 4 fresh valid claims from one covenant, 2-of-3 deployment, confirmed unreserved Admin Wallet funds. Use setup.html to seed the required count.</p>
+<ol class="steps">
+<li>Paste reports and retain exactly 4 claim inputs. Set a fee rate, record txid, size, fee, input total and change. Ensure the plan contains one transaction.</li>
+<li>Open the checklist; record any registration and perform L07 if needed. Click Confirm.</li>
+<li>Compare and approve the claim pass, then the fee pass below. Measure each loading/signing interval.</li>
+<li>Check Pending for your signature. Have another admin sign to quorum, then verify node acceptance and Past status.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<h3>Claim pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h3>Fee pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> The checklist lists this transaction’s actual values, fee and destination. Pending shows Signed and quorum progress; at quorum the app broadcasts. Failed broadcast stays Pending with Retry broadcast.</p>
+<p>Timing baseline for Nano X 2.4.6: claim loading 4 + 2.0 × 4 = 12 s; claim signing 1.9 × 4 = 7.6 s; fee-pass loading 3 + 1.3 × 4 = 8.2 s. Excludes human review, registration and final fee signing. Record measured times, not a timeout pass/fail threshold.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>All values are populated and agree with the checklist.</li>
+<li>One claim pass plus one fee pass, without crash, lock or 0x6a80.</li>
+<li>Valid signatures stored; Core accepts the completed transaction.</li>
+</ul>
+<div class="note">
+<b>Result L10</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L11">
+<h2>L11. Payout with 8 claims</h2>
+<p>
+<span class="req">PRD 06 §6.d.ii–vi, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> 8 fresh valid claims from one covenant, 2-of-3 deployment, confirmed unreserved Admin Wallet funds. Use setup.html to seed the required count.</p>
+<ol class="steps">
+<li>Paste reports and retain exactly 8 claim inputs. Set a fee rate, record txid, size, fee, input total and change. Ensure the plan contains one transaction.</li>
+<li>Open the checklist; record any registration and perform L07 if needed. Click Confirm.</li>
+<li>Compare and approve the claim pass, then the fee pass below. Measure each loading/signing interval.</li>
+<li>Check Pending for your signature. Have another admin sign to quorum, then verify node acceptance and Past status.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<h3>Claim pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h3>Fee pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> The checklist lists this transaction’s actual values, fee and destination. Pending shows Signed and quorum progress; at quorum the app broadcasts. Failed broadcast stays Pending with Retry broadcast.</p>
+<p>Timing baseline for Nano X 2.4.6: claim loading 4 + 2.0 × 8 = 20 s; claim signing 1.9 × 8 = 15.2 s; fee-pass loading 3 + 1.3 × 8 = 13.4 s. Excludes human review, registration and final fee signing. Record measured times, not a timeout pass/fail threshold.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>All values are populated and agree with the checklist.</li>
+<li>One claim pass plus one fee pass, without crash, lock or 0x6a80.</li>
+<li>Valid signatures stored; Core accepts the completed transaction.</li>
+</ul>
+<div class="note">
+<b>Result L11</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L12">
+<h2>L12. Payout with 90 claims</h2>
+<p>
+<span class="req">PRD 06 §6.d.ii–vi, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> 90 fresh valid claims from one covenant, 2-of-3 deployment, confirmed unreserved Admin Wallet funds. Use setup.html to seed the required count.</p>
+<ol class="steps">
+<li>Paste reports and retain exactly 90 claim inputs. Set a fee rate, record txid, size, fee, input total and change. Ensure the plan contains one transaction.</li>
+<li>Open the checklist; record any registration and perform L07 if needed. Click Confirm.</li>
+<li>Compare and approve the claim pass, then the fee pass below. Measure each loading/signing interval.</li>
+<li>Check Pending for your signature. Have another admin sign to quorum, then verify node acceptance and Past status.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<h3>Claim pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h3>Fee pass</h3>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> The checklist lists this transaction’s actual values, fee and destination. Pending shows Signed and quorum progress; at quorum the app broadcasts. Failed broadcast stays Pending with Retry broadcast.</p>
+<p>Timing baseline for Nano X 2.4.6: claim loading 4 + 2.0 × 90 = 184 s; claim signing 1.9 × 90 = 171 s; fee-pass loading 3 + 1.3 × 90 = 120 s. Excludes human review, registration and final fee signing. Record measured times, not a timeout pass/fail threshold.</p>
+<div class="warn">The checklist warns from 15 claims. Before starting, lengthen PIN lock or keep the device awake with occasional navigation-button activity. Never blindly approve. At 2-of-3 with the reference fee input shape, 90 claims fit (9,899 vB). The hard limit is 10,000 vB; extra fee inputs or another threshold can reduce the claim capacity.</div>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>All values are populated and agree with the checklist.</li>
+<li>One claim pass plus one fee pass, without crash, lock or 0x6a80.</li>
+<li>Valid signatures stored; Core accepts the completed transaction.</li>
+</ul>
+<div class="note">
+<b>Result L12</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L13">
+<h2>L13. Payout across 2 covenants</h2>
+<p>
+<span class="req">PRD 06 §6.d.vi, §3.b.iv; PRD 07 dynamic operators</span>
+</p>
+<p>
+<b>Preconditions.</b> Fresh claims across 2 covenants in one transaction; deployment includes the operator schedule. A single-covenant seed is insufficient: obtain a matching multi-covenant fixture from the test coordinator and mark BLOCKED if unavailable.</p>
+<ol class="steps">
+<li>Record the covenant/policy of every claim in the plan. Open the checklist and Confirm.</li>
+<li>For each covenant in checklist order: register if needed (L07), then compare and approve its claim pass.</li>
+<li>After all covenant passes, compare and approve the single fee pass. Complete quorum and verify Core acceptance.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>For each covenant: optional registration (L07), then the claim sequence below. Finish with the fee sequence once.</p>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> A separate named claim step per covenant, followed by fee inputs. Registration and claim signing are interleaved, not all registrations first.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Exactly 2 claim passes and one fee pass.</li>
+<li>Each “You spend” on 2.5+ equals that covenant’s claims; External amounts includes the other covenants plus fee coins.</li>
+<li>All policy names, destinations and whole-transaction fees match; completed transaction accepted.</li>
+</ul>
+<div class="note">
+<b>Result L13</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L14">
+<h2>L14. Payout across 3 covenants</h2>
+<p>
+<span class="req">PRD 06 §6.d.vi, §3.b.iv; PRD 07 dynamic operators</span>
+</p>
+<p>
+<b>Preconditions.</b> Fresh claims across 3 covenants in one transaction; deployment includes the operator schedule. A single-covenant seed is insufficient: obtain a matching multi-covenant fixture from the test coordinator and mark BLOCKED if unavailable.</p>
+<ol class="steps">
+<li>Record the covenant/policy of every claim in the plan. Open the checklist and Confirm.</li>
+<li>For each covenant in checklist order: register if needed (L07), then compare and approve its claim pass.</li>
+<li>After all covenant passes, compare and approve the single fee pass. Complete quorum and verify Core acceptance.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>For each covenant: optional registration (L07), then the claim sequence below. Finish with the fee sequence once.</p>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> A separate named claim step per covenant, followed by fee inputs. Registration and claim signing are interleaved, not all registrations first.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Exactly 3 claim passes and one fee pass.</li>
+<li>Each “You spend” on 2.5+ equals that covenant’s claims; External amounts includes the other covenants plus fee coins.</li>
+<li>All policy names, destinations and whole-transaction fees match; completed transaction accepted.</li>
+</ul>
+<div class="note">
+<b>Result L14</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L15">
+<h2>L15. Reject at every payout pass</h2>
+<p>
+<span class="req">PRD 06 §6.d.vi, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> One transaction only; fresh multi-covenant claims, and an unregistered policy for the registration variant. Snapshot Pending before each attempt.</p>
+<ol class="steps">
+<li>Run separate attempts rejecting registration, first claim pass, each later covenant pass, and the final fee pass. Approve only earlier passes necessary to reach the target.</li>
+<li>On rejection, wait for the app error and refresh Pending. Retry after reviewing anew.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Follow L07 registration or the claim/fee sequences below up to the target; choose the device’s rejection action instead of the final approval.</p>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> Payout rejection is an error. The failed transaction is not submitted. A completed registration may remain cached even if signing was rejected.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>No new Pending payout or broadcast for the failed transaction.</li>
+<li>No half-signed failed transaction published; retry is possible.</li>
+<li>Record one result per rejection point.</li>
+</ul>
+<div class="note">
+<b>Result L15</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L16">
+<h2>L16. Unplug or lock during payout signing</h2>
+<p>
+<span class="req">PRD 06 §6.d.vi, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Single transaction with fresh claims; snapshot Pending; do not type a PIN during active device I/O.</p>
+<ol class="steps">
+<li>Run separate attempts unplugging during claim loading, after claim approval while signing, and during the fee pass. Include a later covenant pass.</li>
+<li>For the lock variant, let PIN lock occur during a long signing operation. Do not unlock while the request is running.</li>
+<li>Wait for error or stop the desktop if it hangs. Record elapsed time. Only then reconnect, unlock, reopen Bitcoin Test and review again.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Loading/signing or the interrupted prefix of the sequences below, then no successful completion for the interrupted pass. A lock shows the firmware lock/PIN screen; do not enter it yet.</p>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → Amount: 0 TEST (self-transfer) → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → External amounts: all claim inputs → You spend: fee inputs minus change; or You receive: change minus fee inputs → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> Device/transport failure should be visible. Refresh Pending and inspect node state before retrying. Record hangs as failures; do not infer cancellation merely from a closed modal.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Failed transaction was neither submitted nor broadcast.</li>
+<li>App does not crash; no silent success.</li>
+<li>Fresh review after recovery succeeds.</li>
+</ul>
+<div class="note">
+<b>Result L16</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L17">
+<h2>L17. Sign another admin’s pending payout</h2>
+<p>
+<span class="req">PRD 06 §6.b.vii–viii</span>
+</p>
+<p>
+<b>Preconditions.</b> Another admin created a pending payout; this Ledger has not signed it. Creator already signed fee inputs. Include single and multi-covenant variants.</p>
+<ol class="steps">
+<li>Select Pending → Sign. Compare input list, fee, change owner and checklist.</li>
+<li>Register missing policies, then approve each claim pass. Repeat a fresh attempt with reject and unplug to verify failure leaves existing signatures unchanged.</li>
+<li>Complete the success variant to quorum and inspect Past.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Optional registration L07 per covenant, then this claim sequence per unsigned covenant. No fee pass.</p>
+<table>
+<thead>
+<tr>
+<th scope="col">Bitcoin Test 2.4.x</th>
+<th scope="col">Bitcoin Test 2.5+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+<td>
+<p>Security risk → There are external inputs / Reject if not sure → Continue anyway → Review transaction / to send bitcoin → From account: Payout &lt;id&gt; → Amount: change value → To: change address, all pages → External amounts: all inputs outside this covenant → You spend: this covenant’s claim input total → Fees: whole transaction fee → Sign transaction → Transaction signed.</p>
+</td>
+</tr>
+</tbody>
+</table>
+<p>
+<b>App at the same time.</b> The checklist identifies the creator’s Admin Wallet as change owner. Sign becomes Signed below quorum. At quorum broadcast is automatic; failures retain Retry broadcast.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>No fee signing requested from the other admin.</li>
+<li>Change owner is correct; existing signatures survive a failed attempt.</li>
+<li>Quorum causes Core acceptance and Past Unconfirmed; mine to see Confirmed.</li>
+</ul>
+<div class="note">
+<b>Result L17</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L18">
+<h2>L18. Admin Wallet send: confirm</h2>
+<p>
+<span class="req">PRD 06 §4.b.iii, §4.b.v, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Confirmed available funds and an external regtest destination.</p>
+<ol class="steps">
+<li>Open Admin Wallet → Send BTC. Enter destination, amount and fee rate; review Amount, To and Fees. Before the valid send, try an invalid address, a wrong-network address and an amount above available funds: Confirm must stay disabled with the critical error and no device signing prompt. On regtest a missing next-block estimate requires a manual rate.</li>
+<li>Confirm in the app, compare all device pages, approve Sign transaction.</li>
+<li>Record the returned txid and confirm it is in the node mempool and the wallet’s own sends. Repeat for P2PKH, P2SH, P2WPKH, P2WSH and P2TR destinations.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Review transaction / to send bitcoin → Amount: recipient amount in TEST → To: complete recipient address, all pages → Fees: mining fee in TEST → Sign transaction → Transaction signed.</p>
+<p>
+<b>App at the same time.</b> One common checklist on 2.4.x and 2.5+: Amount, To, Fees. Review includes actual amount, fee and transaction id. Confirm signs only the transaction reviewed; if it changes the app asks for a fresh review.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>No policy registration or external-input warning.</li>
+<li>Recipient, amount and fee match; change returns to the first unused change address.</li>
+<li>Only confirmed, unreserved coins spent; unconfirmed change cannot fund another send.</li>
+</ul>
+<div class="note">
+<b>Result L18</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L19">
+<h2>L19. Admin Wallet send: reject</h2>
+<p>
+<span class="req">PRD 06 §4.b.iii, §4.b.v, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Valid reviewed send; record wallet and node state.</p>
+<ol class="steps">
+<li>Confirm in the app, then reject on the device.</li>
+<li>Check that the send form remains available. Confirm again and approve, or back out.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Review transaction / to send bitcoin → Amount: recipient amount in TEST → To: complete recipient address, all pages → Fees: mining fee in TEST → Sign transaction → Transaction signed.</p>
+<p>
+<b>App at the same time.</b> One common checklist on 2.4.x and 2.5+: Amount, To, Fees. Review includes actual amount, fee and transaction id. Confirm signs only the transaction reviewed; if it changes the app asks for a fresh review.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Reject does nothing in the UI apart from ending busy state; no error banner or success txid.</li>
+<li>No broadcast or recorded send from rejection; retry works.</li>
+</ul>
+<div class="note">
+<b>Result L19</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L20">
+<h2>L20. Admin Wallet Max send</h2>
+<p>
+<span class="req">PRD 06 §4.b.iii, §4.b.v, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Confirmed available coins; enough for fee; record coins held by Pending payouts.</p>
+<ol class="steps">
+<li>Choose Send BTC, enter destination, click Max and review at a chosen fee rate.</li>
+<li>Compare and approve on Ledger. Inspect resulting transaction.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Review transaction / to send bitcoin → Amount: recipient amount in TEST → To: complete recipient address, all pages → Fees: mining fee in TEST → Sign transaction → Transaction signed.</p>
+<p>
+<b>App at the same time.</b> One common checklist on 2.4.x and 2.5+: Amount, To, Fees. Review includes actual amount, fee and transaction id. Confirm signs only the transaction reviewed; if it changes the app asks for a fresh review.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Amount equals selected available inputs minus fee; no change output.</li>
+<li>Reserved and unconfirmed coins excluded.</li>
+<li>Device amount and fee match review; Core accepts.</li>
+</ul>
+<div class="note">
+<b>Result L20</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L21">
+<h2>L21. Fee bump of an own send</h2>
+<p>
+<span class="req">PRD 06 §4.b.iii, §4.b.v, §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> An own ordinary send remains unconfirmed; do not mine before bump.</p>
+<ol class="steps">
+<li>Click Bump fee on that send. Choose a higher rate satisfying the replacement minimum and review.</li>
+<li>First reject on Ledger and confirm the old send is unchanged. Retry and approve.</li>
+<li>Inspect replacement txid in the node and app. Repeat for a Max send.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Review transaction / to send bitcoin → Amount: recipient amount in TEST → To: complete recipient address, all pages → Fees: mining fee in TEST → Sign transaction → Transaction signed.</p>
+<p>
+<b>App at the same time.</b> One common checklist on 2.4.x and 2.5+: Amount, To, Fees. Review includes actual amount, fee and transaction id. Confirm signs only the transaction reviewed; if it changes the app asks for a fresh review.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Same recipient and amount for ordinary send, higher fee, reduced change (more confirmed coins may be added if needed).</li>
+<li>Max replacement reduces recipient amount; device review shows that new amount.</li>
+<li>Replacement recorded only after Core accepts; reject leaves original unchanged.</li>
+</ul>
+<div class="note">
+<b>Result L21</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L22">
+<h2>L22. Blank value means reject</h2>
+<p>
+<span class="req">PRD 06 §3.b.iv</span>
+</p>
+<p>
+<b>Preconditions.</b> Apply throughout every test. This is a conditional observation, not an instruction to manufacture a blank on hardware.</p>
+<ol class="steps">
+<li>If any amount, destination, fee, key or message value is blank or unreadable, stop approving. Photograph the screen and the matching app checklist.</li>
+<li>Reject on the Ledger. Record FAIL for the affected flow and capture the error/recovery. If no blank occurs, record NOT OBSERVED rather than a simulated pass.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>Expected: populated values in the relevant sequence above. A label without its required value on physical hardware is a failure.</p>
+<p>
+<b>App at the same time.</b> The checklist still supplies expected values. Its presence cannot replace readable device values.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>No approval of an unreadable value.</li>
+<li>Physical blank recorded with model, OS, app version and photos.</li>
+</ul>
+<div class="note">
+<b>Result L22</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="L23">
+<h2>L23. Split payout batch</h2>
+<p>
+<span class="req">PRD 06 §6.d.ii, §6.d.vi</span>
+</p>
+<p>
+<b>Preconditions.</b> Fresh 91 claims in reference 2-of-3 fixture; sufficient confirmed fee coins. Check actual planner capacity.</p>
+<ol class="steps">
+<li>Review the split into separate transactions (reference shape: 90 + 1). Record every txid and separate checklist.</li>
+<li>For each transaction, approve needed registrations, each covenant claim pass, then its fee pass.</li>
+<li>On a fresh batch, reject a pass in transaction 2 after transaction 1 completes; inspect Pending before retrying.</li>
+</ol>
+<h3>Device screens, in order</h3>
+<p>For each transaction repeat optional L07 registration, the claim pass per covenant (L08), then the fee pass (L08). A policy already registered earlier in this batch is not registered again.</p>
+<p>
+<b>App at the same time.</b> Checklist labels transaction 1 of 2 and 2 of 2. Transactions submit individually. Earlier completed transactions can remain Pending when a later one fails.</p>
+<h3>Pass criteria</h3>
+<ul class="check">
+<li>Each transaction is at most 10,000 vB; all approved transactions have correct signatures.</li>
+<li>Failed later transaction is not submitted; earlier success is preserved and reported.</li>
+<li>Do not claim whole-batch rollback.</li>
+</ul>
+<div class="note">
+<b>Result L23</b>
+<p>Device model: __________ · Device OS: __________ · Bitcoin Test version: __________<br>Desktop build / host OS: __________ · Date / tester: __________<br>PASS / FAIL / BLOCKED / NOT RUN: __________<br>Loading / review / signing / fee-pass timings: __________<br>Notes, txid, evidence filenames: ________________________________________</p>
+</div>
+</section>
+<section id="report">
+<h2>Report results and limitations</h2>
+<p>Copy <a href="ledger-results.csv">ledger-results.csv</a> to a dated result file and fill one row per case, device/app combination and variant. Use PASS, FAIL, BLOCKED or NOT RUN; L02 is an accepted gap, not a PRD pass. Also fill or print the result box beside each case. Attach full device photos, matching UI checklist captures, timings by pass, sanitized app/test logs, txids and Core acceptance/confirmation evidence. For a failure give the last successful screen, exact error (including 0x6a80), whether Bitcoin Test exited or locked, and recovery steps. Preserve results from failed attempts.</p>
+<p>Attach build commit, fixture report identifiers and deployment fingerprint. Do not attach seeds, private keys, PINs, RPC passwords or coordinator tokens. Send the bundle to the test coordinator with the failing case IDs. A case without fixtures or a compatible device is BLOCKED, not skipped silently.</p>
+<div class="warn">
+<b>Known emulator artefact.</b> Emulated 2.4.6 images show blank Amount, To and Fees in payout reviews. The wallet send and bump logs also show bare labels on emulated 2.4.6. Physical Nano X 2.4.6 payout values were readable in the recorded run. Never accept a blank physical screen on the strength of these images. Wallet logs on 2.5.1 show Amount 0.0002 TEST, Fees 0.00000308 TEST for send and 0.0000077 TEST for bump; these are examples only. An initial Message signed or Transaction signed in those logs belongs to the preceding operation.</div>
+<details>
+<summary>Requirement gaps and boundaries</summary>
+<ul>
+<li>D5: no Payout Admin ID display, certificate signing/copy or verify-on-device before or after sign-in. L02 records this gap.</li>
+<li>D6: no fee bump for payout transactions. L21 applies only to own Admin Wallet sends.</li>
+<li>D7: TRUC 10,000 vB; 90 claims is the reference 2-of-3 capacity, not universal across input shapes.</li>
+<li>D9: incoming unconfirmed receives are not shown; address rotation waits for confirmation.</li>
+<li>D11: no P2PK destination address exists; test the five address types in L18.</li>
+<li>Ledger only. Trezor and BitBox are unsupported by this slice.</li>
+<li>Export/import, paste signatures, retry broadcast and rebroadcast use already produced signatures. They introduce no device review. Check their UI behavior in guide.html.</li>
+</ul>
+</details>
+<p>Source baseline: PRD 05 requirement 6 as updated by PRD 06 §§3, 4 and 6; PRD 07; block-payouts spec (Ledger, Decisions, Tests, Physical Ledger); application/payouts.rs ledger_review and wallet_review; old runbook §§6 and 8 and compliance M2; local Admin Wallet contract and send/bump logs. The current code/spec takes precedence over stale runbook report-format and wallet-status text.</p>
+</section>
+<footer>Prepared for physical testing. No hardware was accessed while authoring this guide. All result rows start NOT RUN. Reference images copied from the historical payout guide.</footer>
+</main>
+</body>
+</html>
