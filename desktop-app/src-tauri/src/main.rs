@@ -30,16 +30,26 @@ fn main() {
             use desktop_app::infrastructure::pending_reveals_store::init_app_data_dir;
             use std::sync::{Arc, RwLock};
 
-            if let Ok(data_dir) = app.path().app_data_dir() {
-                init_app_data_dir(data_dir);
+            let data_dir = app.path().app_data_dir().ok();
+            if let Some(dir) = data_dir.clone() {
+                init_app_data_dir(dir);
             }
+            // Block Payouts and the Admin Wallet panel spend from the same wallet: each tells the
+            // other which coins it has committed.
+            let reservations =
+                desktop_app::infrastructure::admin_wallet_reservations::AdminWalletReservations::new(
+                    data_dir.clone(),
+                );
+            // Block Payouts: Ledger-backed; registered policy HMACs kept under app data.
+            app.manage(
+                desktop_app::application::payouts::PayoutState::ledger(data_dir)
+                    .with_reservations(reservations.clone()),
+            );
 
-            app.manage(desktop_app::application::payouts::PayoutState::ledger(
-                app.path().app_data_dir().ok(),
-            ));
             let config = load_node_config(app.handle());
             let node_config_arc = Arc::new(RwLock::new(config));
-            let wallet_session = WalletSession::with_node_config(Arc::clone(&node_config_arc));
+            let wallet_session = WalletSession::with_node_config(Arc::clone(&node_config_arc))
+                .with_reservations(reservations);
             // Settles, in the background, every send and bundle whose broadcast got no
             // definitive answer (#516).
             commands::proposals::spawn_settle_loop(

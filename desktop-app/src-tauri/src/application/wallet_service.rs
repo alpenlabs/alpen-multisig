@@ -3,6 +3,7 @@ use crate::application::tx_broadcaster::{
     broadcast_single_with_fallback, AllSourcesFailed, TxBroadcaster, TxOutcome,
 };
 use crate::infrastructure::admin_wallet::AdminWalletError;
+use crate::infrastructure::admin_wallet_reservations::{unix_now, AdminWalletReservations};
 use crate::infrastructure::hw_wallet::hw_psbt_signer::HwPsbtSigner;
 use crate::infrastructure::node_config_store::NodeConfig;
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,9 @@ pub struct BalanceDto {
     /// Coins spent by this session's in-flight transactions (#516) — left out of the three
     /// figures above, because no build may select them.
     pub reserved_sats: u64,
+    /// Coins that are fee inputs of pending Block Payouts transactions: left out of the three
+    /// figures above too, because spending them here would invalidate those payouts.
+    pub payout_reserved_sats: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +174,9 @@ pub struct WalletService {
     unsettled: std::sync::Mutex<
         std::collections::HashMap<bdk_wallet::bitcoin::Txid, bdk_wallet::bitcoin::Transaction>,
     >,
+    /// Shared with Block Payouts, which spends from the same wallet: it tells this side which
+    /// coins pending payouts hold, and learns from this side which coins are in flight.
+    shared: AdminWalletReservations,
 }
 
 /// Keychain selection for address listing.
@@ -307,7 +314,16 @@ impl WalletService {
             network,
             reserved: std::sync::Mutex::new(std::collections::HashMap::new()),
             unsettled: std::sync::Mutex::new(std::collections::HashMap::new()),
+            shared: AdminWalletReservations::default(),
         }
+    }
+
+    /// Shares coin reservations with Block Payouts. The in-flight coins of an earlier session
+    /// ended with that session.
+    pub(crate) fn with_reservations(mut self, shared: AdminWalletReservations) -> Self {
+        shared.set_in_flight([]);
+        self.shared = shared;
+        self
     }
 
     /// Creates a WalletService with an attached signer for session-driven signing.
@@ -562,24 +578,47 @@ impl WalletService {
     /// not in the wallet graph. There is no time expiry (#516): a reservation ends when its tx
     /// is recorded or seen by a sync, when a broadcaster's answer proves it never landed, or
     /// with the session.
+    ///
+    /// Fee coins of pending Block Payouts transactions are skipped too: those payouts wait for
+    /// signatures off-chain, so no source shows their coins as spent.
     pub(crate) fn reserved_outpoints(&self) -> Vec<bdk_wallet::bitcoin::OutPoint> {
-        self.reservations().keys().copied().collect()
+        let mut reserved = self.payout_reserved_outpoints();
+        reserved.extend(self.reservations().keys().copied());
+        reserved.into_iter().collect()
+    }
+
+    fn payout_reserved_outpoints(
+        &self,
+    ) -> std::collections::HashSet<bdk_wallet::bitcoin::OutPoint> {
+        let mut held = self.shared.held_by_payouts(unix_now());
+        held.extend(self.shared.own_sends());
+        held
+    }
+
+    /// Tells Block Payouts which coins this session's in-flight transactions spend.
+    fn share_in_flight(&self) {
+        let in_flight: Vec<_> = self.reservations().keys().copied().collect();
+        self.shared.set_in_flight(in_flight);
     }
 
     /// Reserves the inputs of a freshly built PSBT. Call it while still holding the wallet
     /// lock the PSBT was built under, so no other build can select the same coins.
     pub(crate) fn reserve_inputs(&self, unsigned_tx: &bdk_wallet::bitcoin::Transaction) {
         let txid = unsigned_tx.compute_txid();
-        let mut reserved = self.reservations();
-        for input in &unsigned_tx.input {
-            reserved.insert(input.previous_output, txid);
+        {
+            let mut reserved = self.reservations();
+            for input in &unsigned_tx.input {
+                reserved.insert(input.previous_output, txid);
+            }
         }
+        self.share_in_flight();
     }
 
     /// Returns the inputs of a transaction that is not, and will not be, on the network to the
     /// spendable pool.
     pub(crate) fn release_reservation(&self, txid: bdk_wallet::bitcoin::Txid) {
         self.reservations().retain(|_, r| *r != txid);
+        self.share_in_flight();
         self.unsettled_txs().remove(&txid);
     }
 
@@ -647,6 +686,7 @@ impl WalletService {
     fn drop_reservations_seen_by(&self, wallet: &bdk_wallet::Wallet) {
         self.reservations()
             .retain(|_, txid| wallet.get_tx(*txid).is_none());
+        self.share_in_flight();
         self.unsettled_txs()
             .retain(|txid, _| wallet.get_tx(*txid).is_none());
     }
@@ -826,15 +866,22 @@ impl WalletService {
         let mut confirmed_sats = balance.confirmed.to_sat();
         let mut unconfirmed_sats =
             balance.trusted_pending.to_sat() + balance.untrusted_pending.to_sat();
-        // #516: in-flight coins are not spendable; they are reported on their own.
+        // #516: in-flight coins are not spendable; they are reported on their own. So are the
+        // fee coins of pending payouts.
         let mut reserved_sats = 0;
+        let mut payout_reserved_sats = 0;
+        let in_flight: std::collections::HashSet<_> = self.reservations().keys().copied().collect();
         for utxo in self
             .reserved_outpoints()
             .into_iter()
             .filter_map(|outpoint| wallet.get_utxo(outpoint))
         {
             let value = utxo.txout.value.to_sat();
-            reserved_sats += value;
+            if in_flight.contains(&utxo.outpoint) {
+                reserved_sats += value;
+            } else {
+                payout_reserved_sats += value;
+            }
             match utxo.chain_position {
                 bdk_wallet::chain::ChainPosition::Confirmed { .. } => {
                     confirmed_sats = confirmed_sats.saturating_sub(value)
@@ -849,6 +896,7 @@ impl WalletService {
             unconfirmed_sats,
             total_sats: confirmed_sats + unconfirmed_sats,
             reserved_sats,
+            payout_reserved_sats,
         })
     }
 
@@ -1017,6 +1065,7 @@ mod tests {
             unconfirmed_sats: 50,
             total_sats: 150,
             reserved_sats: 0,
+            payout_reserved_sats: 0,
         };
         assert_eq!(balance.confirmed_sats, 100);
         assert_eq!(balance.unconfirmed_sats, 50);
@@ -1940,6 +1989,85 @@ mod tests {
                 (0, 0, 0, 100_000)
             );
             assert!(svc.list_utxos().await.expect("utxos").is_empty());
+        }
+
+        /// The fee coin of a payout that waits for signatures is unspent on every source. The
+        /// payout screen says that it is taken; this side neither counts nor spends it.
+        #[tokio::test]
+        async fn a_coin_held_by_a_pending_payout_is_neither_counted_nor_spent() {
+            let shared = AdminWalletReservations::default();
+            let svc = mnemonic_service(&[100_000]).with_reservations(shared.clone());
+            let coin = svc
+                .wallet
+                .lock()
+                .await
+                .list_unspent()
+                .next()
+                .expect("coin")
+                .outpoint;
+            let now = unix_now();
+            shared.set_held_by_payouts([(coin, now + 3_600)], now);
+
+            let balance = svc.get_balance().await.expect("balance");
+            assert_eq!(
+                (
+                    balance.confirmed_sats,
+                    balance.total_sats,
+                    balance.reserved_sats,
+                    balance.payout_reserved_sats
+                ),
+                (0, 0, 0, 100_000)
+            );
+            assert!(svc.list_utxos().await.expect("utxos").is_empty());
+            match build_commit(&svc).await {
+                Err(AdminWalletError::WalletCreation(message)) => {
+                    assert!(message.contains("Insufficient funds"), "{message}")
+                }
+                other => panic!("the payout's fee coin must not fund a commit, got: {other:?}"),
+            }
+
+            // The payout was broadcast, or it expired: the coin is free again.
+            shared.set_held_by_payouts([], now);
+            let balance = svc.get_balance().await.expect("balance");
+            assert_eq!(
+                (balance.confirmed_sats, balance.payout_reserved_sats),
+                (100_000, 0)
+            );
+            build_commit(&svc).await.expect("commit builds");
+        }
+
+        #[tokio::test]
+        async fn own_payout_wallet_sends_are_reserved_and_counted() {
+            let shared = AdminWalletReservations::default();
+            let svc = mnemonic_service(&[100_000]).with_reservations(shared.clone());
+            let coin = svc
+                .wallet
+                .lock()
+                .await
+                .list_unspent()
+                .next()
+                .unwrap()
+                .outpoint;
+            shared.set_own_sends([coin]);
+            assert!(svc.reserved_outpoints().contains(&coin));
+            let balance = svc.get_balance().await.unwrap();
+            assert_eq!(balance.payout_reserved_sats, 100_000);
+            assert_eq!(balance.confirmed_sats, 0);
+        }
+
+        /// The payout screen reads the wallet from Bitcoin Core, where a coin this side is
+        /// spending stays unspent until the transaction arrives.
+        #[tokio::test]
+        async fn in_flight_coins_are_told_to_the_payout_screen() {
+            let shared = AdminWalletReservations::default();
+            let svc = mnemonic_service(&[100_000]).with_reservations(shared.clone());
+            assert!(shared.in_flight().is_empty());
+
+            let commit = build_commit(&svc).await.expect("commit builds");
+            assert_eq!(shared.in_flight(), inputs(&commit));
+
+            svc.release_reservation(commit.compute_txid());
+            assert!(shared.in_flight().is_empty());
         }
 
         #[tokio::test]

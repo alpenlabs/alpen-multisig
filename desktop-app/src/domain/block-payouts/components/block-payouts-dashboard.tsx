@@ -3,7 +3,9 @@ import type { BlockPayoutsHook } from '../hooks/use-block-payouts'
 import { useCreateBlockPayout } from '../hooks/use-create-block-payout'
 import { amountUnit } from '../model/block-payouts.mapping'
 import type { Tab } from '../model/block-payouts.types'
+import { usePayoutAdminWallet } from '../hooks/use-payout-admin-wallet'
 import { CreateBlockPayoutModal } from './create-block-payout-modal'
+import { PayoutAdminWalletModal } from './payout-admin-wallet-modal'
 import { PasteSignaturesModal } from './paste-signatures-modal'
 import { PastTransactionsList } from './past-transactions-list'
 import { PendingTransactionsList } from './pending-transactions-list'
@@ -19,6 +21,11 @@ const TAB_LABELS: { id: Tab; label: string }[] = [
 function CreateFlow({ hook, unit }: Props & { unit: string }) {
 	const flow = useCreateBlockPayout(hook.device)
 	return <CreateBlockPayoutModal unit={unit} flow={flow} onCreated={hook.handleCreated} onClose={hook.closeModal} />
+}
+
+function AdminWalletFlow({ hook, unit }: Props & { unit: string }) {
+	const adminWallet = usePayoutAdminWallet(hook.device)
+	return <PayoutAdminWalletModal adminWallet={adminWallet} unit={unit} onClose={hook.closeModal} />
 }
 
 export function BlockPayoutsDashboard({ hook }: Props) {
@@ -41,6 +48,9 @@ export function BlockPayoutsDashboard({ hook }: Props) {
 					</p>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
+					<PayoutButton appearance="toolbar" onClick={hook.openAdminWalletModal}>
+						Admin Wallet
+					</PayoutButton>
 					<PayoutButton appearance="toolbar" onClick={hook.openImportModal}>
 						Import transaction
 					</PayoutButton>
@@ -140,6 +150,7 @@ export function BlockPayoutsDashboard({ hook }: Props) {
 
 			{activeModal?.kind === 'create' && <CreateFlow hook={hook} unit={unit} />}
 
+			{activeModal?.kind === 'admin-wallet' && <AdminWalletFlow hook={hook} unit={unit} />}
 
 			{toast && (
 				<div

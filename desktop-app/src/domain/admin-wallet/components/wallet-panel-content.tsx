@@ -21,6 +21,8 @@ export type WalletPanelContentProps = {
 	unconfirmedBalanceSats: number
 	/** Coins held by in-flight transactions (#516). */
 	reservedBalanceSats: number
+	/** Fee coins of pending Block Payouts transactions. */
+	payoutReservedBalanceSats: number
 	isBalanceLoading: boolean
 	receiveAddress: string | null
 	/** External index of the current receive address (verify-on-device path). */
@@ -58,6 +60,7 @@ export function WalletPanelContent({
 	confirmedBalanceSats,
 	unconfirmedBalanceSats,
 	reservedBalanceSats,
+	payoutReservedBalanceSats,
 	isBalanceLoading,
 	receiveAddress,
 	receiveIndex,
@@ -137,6 +140,7 @@ export function WalletPanelContent({
 				confirmedSats={confirmedBalanceSats}
 				unconfirmedSats={unconfirmedBalanceSats}
 				reservedSats={reservedBalanceSats}
+				payoutReservedSats={payoutReservedBalanceSats}
 				isLoading={isBalanceLoading}
 			/>
 

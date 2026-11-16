@@ -37,6 +37,7 @@ export type WalletPanelData = {
 	confirmedBalanceSats: number
 	unconfirmedBalanceSats: number
 	reservedBalanceSats: number
+	payoutReservedBalanceSats: number
 	isBalanceLoading: boolean
 	receiveAddress: string | null
 	/** External index of the current receive address (for the verify-on-device path). */
@@ -120,6 +121,7 @@ export function useWalletPanelData(showDisabledError: boolean = true): WalletPan
 		confirmedBalanceSats: balanceHook.data?.confirmedSats ?? 0,
 		unconfirmedBalanceSats: balanceHook.data?.unconfirmedSats ?? 0,
 		reservedBalanceSats: balanceHook.data?.reservedSats ?? 0,
+		payoutReservedBalanceSats: balanceHook.data?.payoutReservedSats ?? 0,
 		isBalanceLoading: balanceHook.isLoading,
 		receiveAddress: receiveAddressHook.address,
 		receiveIndex: receiveAddressHook.index,

@@ -1,9 +1,9 @@
 use super::{
-    admin_label, check_app_unchanged, ledger_review_for, payout_tx, policy, sign_connectors,
-    sign_fee_inputs, AdminSigner, Arc, BTreeSet, ChildNumber, CoordinatorOutcome, CoordinatorPast,
-    CoordinatorPending, Deployment, FromStr, HashSet, LedgerReviewDto, PayoutContext,
-    PayoutCoordinator, PayoutNode, PlanClaim, PolicyStore, Psbt, ScriptBuf, Secp256k1, Serialize,
-    Txid, XOnlyPublicKey, SCAN_RANGE,
+    admin_label, check_app_unchanged, ledger_review_for, payout_tx, policy, share_pending_coins,
+    sign_connectors, sign_fee_inputs, AdminSigner, Arc, BTreeSet, ChildNumber, CoordinatorOutcome,
+    CoordinatorPast, CoordinatorPending, Deployment, FromStr, HashSet, LedgerReviewDto,
+    PayoutContext, PayoutCoordinator, PayoutNode, PlanClaim, PolicyStore, Psbt, ScriptBuf,
+    Secp256k1, Serialize, Txid, XOnlyPublicKey, SCAN_RANGE,
 };
 use super::{ClaimInput, PayoutDevice};
 
@@ -240,6 +240,7 @@ pub async fn overview_for(
     node: &dyn PayoutNode,
 ) -> Result<PayoutsOverviewDto, String> {
     let stored = ctx.coordinator.pending().await.map_err(|e| e.to_string())?;
+    share_pending_coins(ctx, &stored);
     overview_of(&ctx.dep, Some(ctx.me.index), stored, &ctx.coordinator, node).await
 }
 

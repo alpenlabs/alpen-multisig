@@ -1,11 +1,11 @@
 use super::{
-    account_path, admin_wallet_coins, change_or_receive_script, check_app_unchanged,
-    check_claims_on_node, fees, ledger_review, payout_tx, planner, sign_and_submit, wallet_tx,
-    AdminSigner, Amount, ChangeOutput, ChildNumber, CoordinatorPast, CoordinatorPending,
-    Deployment, DerivationPath, Deserialize, FeeInput, FromStr, HashMap, HashSet, LedgerReviewDto,
-    OutPoint, PayoutContext, PayoutNode, PlanClaim, PlanCoin, PolicyStore, Psbt, ScriptBuf,
-    Secp256k1, Serialize, SubmitResultDto, TxOut, WalletCoin, XOnlyPublicKey, Xpub, COIN_CACHE_TTL,
-    SCAN_RANGE,
+    account_path, address_floors, admin_wallet_coins, change_or_receive_script,
+    check_app_unchanged, check_claims_on_node, fees, ledger_review, payout_tx, planner,
+    share_pending_coins, sign_and_submit, wallet_tx, AdminSigner, Amount, ChangeOutput,
+    ChildNumber, CoordinatorPast, CoordinatorPending, Deployment, DerivationPath, Deserialize,
+    FeeInput, FromStr, HashMap, HashSet, LedgerReviewDto, OutPoint, PayoutContext, PayoutNode,
+    PlanClaim, PlanCoin, PolicyStore, Psbt, ScriptBuf, Secp256k1, Serialize, SubmitResultDto,
+    TxOut, WalletCoin, XOnlyPublicKey, Xpub, COIN_CACHE_TTL, SCAN_RANGE,
 };
 
 pub use payout_admin_core::planner::{ClaimInput, PlannedTx as PlannedTxDto};
@@ -271,8 +271,13 @@ pub(super) async fn plan_inputs(
             }
         }
     };
+    address_floors(ctx, &coins);
     let used = used_scripts(&coins, &pending, &past);
-    let (_, reserved, _) = pending_spends(&ctx.dep, &pending);
+    share_pending_coins(ctx, &pending);
+    let (_, mut reserved, _) = pending_spends(&ctx.dep, &pending);
+    // A coin the Admin Wallet panel is spending is unspent on the node until that transaction
+    // arrives there.
+    reserved.extend(ctx.reservations.in_flight());
     Ok((usable_coins(&coins, &reserved), used))
 }
 
@@ -323,7 +328,7 @@ pub(super) async fn build_new_psbts(
         .collect();
     let (dep, me) = (&*ctx.dep, &ctx.me);
     let mut used = used.clone();
-    let floors = [0, 0];
+    let floors = address_floors(ctx, &[]);
     loop {
         if !plan.is_ok() {
             return Err(plan

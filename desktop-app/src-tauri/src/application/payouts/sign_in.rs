@@ -1,10 +1,10 @@
 use super::PayoutDevice;
 use super::{
     account_path, admin_label, blocking, check_coordinator_deployment, fingerprint_u32, text,
-    AdminDto, AdminSigner, Arc, Deployment, FromStr, LedgerPayoutDevice, LedgerReviewDto,
-    LedgerStepDto, PayoutContext, PayoutCoordinator, PayoutState, Serialize, SessionInner,
-    SignatureResult, XOnlyPublicKey, Xpub, MSG_NOT_A_PAYOUT_ADMIN, MSG_NOT_SIGNED_IN,
-    PAYOUT_AUTHORITY,
+    AdminDto, AdminSigner, AdminWalletReservations, Arc, CoinCache, Deployment, FromStr,
+    LedgerPayoutDevice, LedgerReviewDto, LedgerStepDto, PayoutContext, PayoutCoordinator,
+    PayoutState, PolicyStore, Serialize, SessionInner, SignatureResult, UsedAddresses,
+    XOnlyPublicKey, Xpub, MSG_NOT_A_PAYOUT_ADMIN, MSG_NOT_SIGNED_IN, PAYOUT_AUTHORITY,
 };
 
 use crate::application::orchestrator_client::{
@@ -249,23 +249,30 @@ pub async fn sign_in(state: &PayoutState, base_url: &str) -> Result<PayoutSessio
 }
 
 impl PayoutState {
-    pub fn new(device: Arc<dyn PayoutDevice>, policies: super::PolicyStore) -> Self {
+    pub fn new(device: Arc<dyn PayoutDevice>, policies: PolicyStore) -> Self {
         Self {
             inner: tokio::sync::Mutex::new(SessionInner::default()),
             policies,
-            coins: Default::default(),
-
             device,
+            coins: CoinCache::default(),
+            reservations: AdminWalletReservations::default(),
+            used_addresses: UsedAddresses::default(),
         }
     }
 
     /// Shares coin reservations with the Admin Wallet panel, which uses the same wallet.
+    pub fn with_reservations(mut self, reservations: AdminWalletReservations) -> Self {
+        self.reservations = reservations;
+        self
+    }
 
     pub fn ledger(data_dir: Option<std::path::PathBuf>) -> Self {
-        Self::new(
+        let mut state = Self::new(
             Arc::new(LedgerPayoutDevice),
-            super::PolicyStore::new(data_dir),
-        )
+            PolicyStore::new(data_dir.clone()),
+        );
+        state.used_addresses = UsedAddresses::new(data_dir);
+        state
     }
 
     pub fn device(&self) -> Arc<dyn PayoutDevice> {
@@ -318,6 +325,8 @@ impl PayoutState {
                 coordinator: c.clone(),
                 device: self.device.clone(),
                 coins: self.coins.clone(),
+                reservations: self.reservations.clone(),
+                used_addresses: self.used_addresses.clone(),
             }),
             _ => Err(MSG_NOT_SIGNED_IN.into()),
         }

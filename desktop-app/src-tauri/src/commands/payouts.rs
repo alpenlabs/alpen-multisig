@@ -2,8 +2,9 @@
 
 use desktop_app::application::orchestrator_url::validate_orchestrator_base_url;
 use desktop_app::application::payouts::{
-    self, BroadcastDto, DeploymentDto, LedgerReviewDto, PasteResultDto, PayoutSessionDto,
-    PayoutState, PayoutsOverviewDto, PlanDto, PlanRequest, SubmitResultDto, VerifyReportsDto,
+    self, AdminWalletDto, BroadcastDto, DeploymentDto, LedgerReviewDto, PasteResultDto,
+    PayoutSessionDto, PayoutState, PayoutsOverviewDto, PlanDto, PlanRequest, SubmitResultDto,
+    VerifyReportsDto,
 };
 use desktop_app::infrastructure::bitcoin_rpc::HttpBitcoinRpcClient;
 use desktop_app::infrastructure::node_config_store::NodeConfigState;
@@ -55,8 +56,25 @@ pub async fn payout_sign_in(
 }
 
 /// The Admin Wallet coins and next receive address the payouts use.
+#[tauri::command]
+pub async fn payout_admin_wallet(
+    cfg: tauri::State<'_, NodeConfigState>,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<AdminWalletDto, String> {
+    let ctx = state.ctx().await?;
+    let node = node(&cfg)?;
+    payouts::admin_wallet(&ctx, &node).await
+}
 
 /// Shows an Admin Wallet receive address on the Ledger.
+#[tauri::command]
+pub async fn payout_show_receive_address(
+    index: u32,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<String, String> {
+    let ctx = state.ctx().await?;
+    payouts::show_receive_address(&ctx, index).await
+}
 
 #[tauri::command]
 pub async fn payout_sign_out(state: tauri::State<'_, PayoutState>) -> Result<(), String> {
@@ -237,4 +255,10 @@ pub async fn payout_rebroadcast(
         .find(|p| p.txid == txid)
         .ok_or("That transaction is not in Past.")?;
     payouts::rebroadcast(&ctx.dep, &txid, &p.psbt, &p.raw_tx, &node).await
+}
+
+#[tauri::command]
+pub async fn payout_wallet_tip(cfg: tauri::State<'_, NodeConfigState>) -> Result<u64, String> {
+    use desktop_app::infrastructure::payout_node::PayoutNode;
+    node(&cfg)?.tip().await
 }

@@ -6,6 +6,7 @@ import {
 	type Denomination,
 } from '@/domain/admin-wallet/model/balance-denomination'
 import { formatInFlightBalanceLine } from '@/domain/admin-wallet/model/format-in-flight-balance-line'
+import { formatPayoutHeldBalanceLine } from '@/domain/admin-wallet/model/format-payout-held-balance-line'
 import { formatUnconfirmedBalanceLine } from '@/domain/admin-wallet/model/format-unconfirmed-balance-line'
 
 export type WalletBalanceProps = {
@@ -13,10 +14,18 @@ export type WalletBalanceProps = {
 	unconfirmedSats: number
 	/** Coins held by in-flight transactions — shown as its own line, never in the balance. */
 	reservedSats: number
+	/** Fee coins of pending Block Payouts transactions — shown as its own line, never in the balance. */
+	payoutReservedSats: number
 	isLoading: boolean
 }
 
-export function WalletBalance({ confirmedSats, unconfirmedSats, reservedSats, isLoading }: WalletBalanceProps) {
+export function WalletBalance({
+	confirmedSats,
+	unconfirmedSats,
+	reservedSats,
+	payoutReservedSats,
+	isLoading,
+}: WalletBalanceProps) {
 	const [denomination, setDenomination] = useState<Denomination>('BTC')
 
 	if (isLoading) {
@@ -34,6 +43,7 @@ export function WalletBalance({ confirmedSats, unconfirmedSats, reservedSats, is
 	const alternate = denominateSats(confirmedSats, alternateDenomination)
 	const unconfirmedLine = formatUnconfirmedBalanceLine(unconfirmedSats)
 	const inFlightLine = formatInFlightBalanceLine(reservedSats)
+	const payoutHeldLine = formatPayoutHeldBalanceLine(payoutReservedSats)
 
 	return (
 		<div className="rounded-2xl bg-bg-surface px-5 py-6">
@@ -76,10 +86,20 @@ export function WalletBalance({ confirmedSats, unconfirmedSats, reservedSats, is
 					{inFlightLine}
 				</div>
 			)}
+			{payoutHeldLine !== null && (
+				<div
+					className="mt-1.5 flex items-center gap-1.5 font-mono text-label text-[#6b7280]"
+					data-testid="e2e-wallet-balance-payout-held"
+				>
+					<span className="h-1.5 w-1.5 flex-none rounded-full bg-[#9ca3af]" aria-hidden="true" />
+					{payoutHeldLine}
+				</div>
+			)}
 			<span className="sr-only">
 				Primary balance: {formatDenominatedBalance(shown)}
 				{unconfirmedLine !== null ? `. Unconfirmed: ${unconfirmedLine}` : ''}
 				{inFlightLine !== null ? `. In flight: ${inFlightLine}` : ''}
+				{payoutHeldLine !== null ? `. Pending payouts: ${payoutHeldLine}` : ''}
 			</span>
 		</div>
 	)

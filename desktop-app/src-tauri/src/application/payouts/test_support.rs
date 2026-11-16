@@ -17,6 +17,8 @@ pub(super) struct MockNode {
     pub(super) reject: bool,
     pub(super) accepted_on_error: bool,
     pub(super) descendants: Option<(u64, u64)>,
+    pub(super) reserve_on_unspent: Option<AdminWalletReservations>,
+    pub(super) unspent_calls: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -57,6 +59,15 @@ impl PayoutNode for MockNode {
         }))
     }
     async fn unspent(&self, o: &OutPoint, include_mempool: bool) -> Result<bool, String> {
+        if let Some(shared) = &self.reserve_on_unspent {
+            if self
+                .unspent_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 1
+            {
+                shared.set_in_flight([*o]);
+            }
+        }
         Ok(self.outputs.contains_key(o)
             && !self.spent.contains(o)
             && !(include_mempool && self.mempool_spent.contains(o)))
@@ -178,6 +189,22 @@ pub(super) fn signed_in(
         coordinator: Arc::new(coordinator),
         device: Arc::new(TestDevice::app_only("2.5.1")),
         coins: Default::default(),
+        reservations: Default::default(),
+        used_addresses: UsedAddresses::default(),
+    }
+}
+
+pub(super) fn stored_pending(psbt: &Psbt, expires_at: i64) -> CoordinatorPending {
+    CoordinatorPending {
+        txid: psbt.unsigned_tx.compute_txid().to_string(),
+        psbt: psbt.to_string(),
+        created_by: String::new(),
+        created_at: 0,
+        expires_at,
+        broadcast_error: None,
+        signatures_received: 0,
+        signatures_needed: 0,
+        duplicate_outpoints: Vec::new(),
     }
 }
 

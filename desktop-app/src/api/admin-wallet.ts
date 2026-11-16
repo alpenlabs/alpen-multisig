@@ -12,6 +12,8 @@ export type BalanceDto = {
 	totalSats: number
 	/** Coins held by this session's in-flight transactions; left out of the three figures above. */
 	reservedSats: number
+	/** Fee coins of pending Block Payouts transactions; left out of the three figures above too. */
+	payoutReservedSats: number
 }
 
 export type OutPointDto = {

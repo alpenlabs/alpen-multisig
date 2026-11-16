@@ -4,6 +4,7 @@ use crate::infrastructure::admin_wallet::wallet::{
     admin_wallet_account_origin, admin_wallet_account_origin_path, load_watch_only_admin_wallet,
 };
 use crate::infrastructure::admin_wallet::{load_admin_wallet, AdminWalletError};
+use crate::infrastructure::admin_wallet_reservations::AdminWalletReservations;
 use crate::infrastructure::hw_wallet::hw_psbt_signer::{HwDeviceType, HwPsbtSigner};
 use crate::infrastructure::node_config_store::NodeConfig;
 use bdk_wallet::bitcoin::Network;
@@ -18,6 +19,8 @@ pub(crate) struct SessionState {
 pub struct WalletSession {
     pub(crate) inner: Arc<RwLock<Option<SessionState>>>,
     node_config: Arc<RwLock<NodeConfig>>,
+    /// Coin reservations shared with Block Payouts, handed to every wallet of this session.
+    reservations: AdminWalletReservations,
 }
 
 impl WalletSession {
@@ -25,6 +28,7 @@ impl WalletSession {
         Self {
             inner: Arc::new(RwLock::new(None)),
             node_config: Arc::new(RwLock::new(NodeConfig::default())),
+            reservations: AdminWalletReservations::default(),
         }
     }
 
@@ -32,7 +36,13 @@ impl WalletSession {
         Self {
             inner: Arc::new(RwLock::new(None)),
             node_config,
+            reservations: AdminWalletReservations::default(),
         }
+    }
+
+    pub fn with_reservations(mut self, reservations: AdminWalletReservations) -> Self {
+        self.reservations = reservations;
+        self
     }
 
     fn read_slot(&self) -> Option<SessionState> {
@@ -60,16 +70,20 @@ impl WalletSession {
         if let Some(state) = guard.take() {
             state.wallet.shutdown();
         }
+        self.reservations.set_in_flight([]);
     }
 
     fn build_session_from_mnemonic(
         mnemonic: &str,
         network: bdk_wallet::bitcoin::Network,
         node_config: Arc<RwLock<NodeConfig>>,
+        reservations: AdminWalletReservations,
     ) -> Result<SessionState, AdminWalletError> {
         let wallet = load_admin_wallet(mnemonic, network)?;
         let signer = Arc::new(MnemonicPsbtSigner::new());
-        let wallet = Arc::new(WalletService::with_signer(wallet, signer, node_config));
+        let wallet = Arc::new(
+            WalletService::with_signer(wallet, signer, node_config).with_reservations(reservations),
+        );
         Ok(SessionState { wallet })
     }
 
@@ -77,6 +91,7 @@ impl WalletSession {
         account_xpub: &str,
         network: bdk_wallet::bitcoin::Network,
         node_config: Arc<RwLock<NodeConfig>>,
+        reservations: AdminWalletReservations,
     ) -> Result<SessionState, AdminWalletError> {
         let wallet = load_watch_only_admin_wallet(
             account_xpub,
@@ -86,7 +101,9 @@ impl WalletSession {
         )?;
         // HW path: attach HwPsbtSigner when master_fingerprint is provided (slice b).
         // For now (slice a), this creates a watch-only session with no signer.
-        let wallet = Arc::new(WalletService::new_watch_only(wallet, node_config));
+        let wallet = Arc::new(
+            WalletService::new_watch_only(wallet, node_config).with_reservations(reservations),
+        );
         Ok(SessionState { wallet })
     }
 
@@ -111,11 +128,10 @@ impl WalletSession {
             account_xpub.to_string(),
             net,
         ));
-        let wallet = Arc::new(WalletService::with_signer(
-            wallet,
-            signer,
-            self.node_config.clone(),
-        ));
+        let wallet = Arc::new(
+            WalletService::with_signer(wallet, signer, self.node_config.clone())
+                .with_reservations(self.reservations.clone()),
+        );
         let state = SessionState { wallet };
         let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if let Some(old) = guard.take() {
@@ -130,7 +146,12 @@ impl WalletSession {
         account_xpub: &str,
         net: Network,
     ) -> Result<(), AdminWalletError> {
-        let state = Self::build_session_from_xpub(account_xpub, net, self.node_config.clone())?;
+        let state = Self::build_session_from_xpub(
+            account_xpub,
+            net,
+            self.node_config.clone(),
+            self.reservations.clone(),
+        )?;
         let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if let Some(old) = guard.take() {
             old.wallet.shutdown();
@@ -145,7 +166,12 @@ impl WalletSession {
         _passphrase: Option<&str>,
         net: Network,
     ) -> Result<(), AdminWalletError> {
-        let state = Self::build_session_from_mnemonic(mnemonic, net, self.node_config.clone())?;
+        let state = Self::build_session_from_mnemonic(
+            mnemonic,
+            net,
+            self.node_config.clone(),
+            self.reservations.clone(),
+        )?;
         let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if let Some(old) = guard.take() {
             old.wallet.shutdown();
@@ -174,6 +200,7 @@ mod tests {
             TEST_MNEMONIC,
             Network::Regtest,
             Arc::new(RwLock::new(NodeConfig::default())),
+            AdminWalletReservations::default(),
         )
         .expect("wallet ok")
     }

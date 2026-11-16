@@ -66,3 +66,7 @@ pub mod payout_coordinator;
 pub mod payout_node;
 
 pub mod payout_policy_store;
+
+pub mod admin_wallet_reservations;
+
+pub mod payout_used_addresses;
