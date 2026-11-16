@@ -9,3 +9,5 @@ pub(crate) mod proposals;
 pub(crate) mod traits;
 
 pub mod payout_deployment;
+
+pub mod payouts;

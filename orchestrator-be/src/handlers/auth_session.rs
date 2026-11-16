@@ -3,6 +3,8 @@ use axum::{
     http::{header::AUTHORIZATION, request::Parts},
 };
 
+pub use super::payout_auth::{GovernanceSession, PayoutAdminSession};
+
 use crate::{domain::authority::Authority, error::AppError, state::AppState};
 
 #[derive(Debug, Clone)]

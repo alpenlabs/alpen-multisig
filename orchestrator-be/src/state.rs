@@ -1,3 +1,4 @@
+use crate::application::payouts::PayoutService;
 use crate::application::traits::ProposalRepository;
 use crate::domain::auth::{AuthSession, PendingAuthChallenge};
 use crate::infrastructure::bitcoin_rpc::BitcoinRpcClient;
@@ -17,6 +18,8 @@ pub struct AppState {
     pub proposal_expiry_days: u64,
     /// The chain the ASM is anchored to; names the network in the admin signing message.
     pub network: bitcoin::Network,
+    /// Admin Block Payouts, when `PAYOUT_ADMIN_PARAMS_PATH` is set. Independent of the ASM.
+    pub payouts: Option<Arc<PayoutService>>,
 }
 
 impl AppState {
@@ -39,6 +42,12 @@ impl AppState {
             btc_client,
             proposal_expiry_days,
             network,
+            payouts: None,
         }
+    }
+
+    pub fn with_payouts(mut self, payouts: Option<Arc<PayoutService>>) -> Self {
+        self.payouts = payouts;
+        self
     }
 }

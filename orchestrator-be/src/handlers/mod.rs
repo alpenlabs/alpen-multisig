@@ -1,3 +1,4 @@
+mod payout_auth;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -9,6 +10,7 @@ use serde_json::{json, Value};
 
 pub mod auth;
 pub mod auth_session;
+pub mod payouts;
 pub mod proposals;
 
 async fn health() -> Json<Value> {
@@ -65,7 +67,8 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/proposals/:action_id/cancel-target-status",
             get(proposals::get_cancel_target_status),
-        );
+        )
+        .merge(payouts::router());
 
     r.with_state(state)
 }

@@ -1,5 +1,9 @@
+import { canStartDeviceOperation, ownsDeviceOperation } from '../model/device-operation'
+import { getOrchestratorBaseUrl } from '@/api/orchestrator-auth'
+import { payoutLoadDeployment, payoutSignInReview, payoutSignIn, payoutSignOut } from '@/api/payouts'
+import type { PayoutSignIn } from '../model/block-payouts.types'
 import { writeClipboard } from '@/api/tauri-bridge'
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef } from 'react'
 import type {
 	PendingBlockPayoutTx,
 	PastBlockPayoutTx,
@@ -57,7 +61,7 @@ function generateTxId(): string {
 	return Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
 }
 
-export function useBlockPayouts(): BlockPayoutsHook {
+export function useBlockPayouts() {
 	const [activeTab, setActiveTab] = useState<Tab>('pending')
 	const [rawPending, setRawPending] = useState<PendingBlockPayoutTx[]>(MOCK_PENDING_TXS)
 	const [pastTxs, setPastTxs] = useState<PastBlockPayoutTx[]>(MOCK_PAST_TXS)
@@ -201,7 +205,82 @@ export function useBlockPayouts(): BlockPayoutsHook {
 		[showToast],
 	)
 
+	const [signIn, setSignIn] = useState<PayoutSignIn>({ phase: 'idle' })
+	const deviceOwner = useRef<symbol | null>(null)
+	const device = {
+		begin: () => {
+			if (!canStartDeviceOperation(deviceOwner.current)) return null
+			const owner = Symbol('Ledger operation')
+			deviceOwner.current = owner
+			return owner
+		},
+		end: (owner: symbol) => {
+			if (ownsDeviceOperation(deviceOwner.current, owner)) deviceOwner.current = null
+		},
+		isBusy: () => !canStartDeviceOperation(deviceOwner.current),
+	}
+	const handleSignIn = async () => {
+		const owner = device.begin()
+		if (owner === null) return
+		try {
+			setSignIn({ phase: 'loading' })
+			const dep = await payoutLoadDeployment()
+			if (!dep.ok) {
+				setSignIn({ phase: 'error', message: dep.error })
+				return
+			}
+			const review = await payoutSignInReview(getOrchestratorBaseUrl())
+			if (!review.ok) {
+				setSignIn({ phase: 'error', message: review.error })
+				return
+			}
+			setSignIn({ phase: 'review', review: review.data })
+		} finally {
+			device.end(owner)
+		}
+	}
+
+	const handleConfirmSignIn = async () => {
+		const owner = device.begin()
+		if (owner === null) return
+		try {
+			if (signIn.phase !== 'review') return
+			setSignIn({ phase: 'signing', review: signIn.review })
+			const dep = await payoutLoadDeployment()
+			if (!dep.ok) {
+				setSignIn({ phase: 'error', message: dep.error })
+				return
+			}
+			const session = await payoutSignIn(getOrchestratorBaseUrl())
+			if (!session.ok) {
+				setSignIn({ phase: 'error', message: session.error })
+				return
+			}
+			setSignIn({
+				phase: 'signed-in',
+				adminLabel: session.data.admin.label,
+				threshold: dep.data.threshold,
+				adminCount: dep.data.admins.length,
+				network: dep.data.network,
+				ledgerApp: session.data.ledgerApp,
+			})
+		} finally {
+			device.end(owner)
+		}
+	}
+
+	const handleSignOut = async () => {
+		if (device.isBusy()) return
+		await payoutSignOut()
+		setSignIn({ phase: 'idle' })
+	}
+
 	return {
+		signIn,
+		device,
+		handleSignIn,
+		handleConfirmSignIn,
+		handleSignOut,
 		activeTab,
 		pendingTxs,
 		pastTxs,

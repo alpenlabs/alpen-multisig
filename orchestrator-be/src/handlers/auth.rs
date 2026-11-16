@@ -126,12 +126,22 @@ pub async fn auth_verify(
         challenge.authority
     };
 
-    let is_member = asm_role_membership::is_signer_member_for_authority(
-        &state.asm_rpc_url,
-        authority,
-        &body.signer_pubkey,
-    )
-    .await?;
+    // Payout Administrators are the admin keys in strata-bridge params.toml, not an ASM role.
+    let is_member = if authority == Authority::PayoutAdmin {
+        let payouts = state.payouts.as_ref().ok_or_else(|| {
+            AppError::BadRequest(
+                "payout administration is not configured on this coordinator".to_string(),
+            )
+        })?;
+        payouts.is_admin_pubkey(&body.signer_pubkey)
+    } else {
+        asm_role_membership::is_signer_member_for_authority(
+            &state.asm_rpc_url,
+            authority,
+            &body.signer_pubkey,
+        )
+        .await?
+    };
     if !is_member {
         return Err(AppError::Unauthorized);
     }

@@ -11,6 +11,7 @@ import { ScreenBottomBar } from '@/components/screen-bottom-bar'
 import { ConnectAdminIdCard } from '@/domain/connect-wallet/components/connect-admin-id-card'
 import type { AdminIdVerifyContext } from '@/domain/admin-wallet/model/hw-device'
 import type { SessionAdminId } from '@/domain/admin-wallet/hooks/use-session-admin-id'
+import { needsMembershipCheck } from '@/domain/connect-wallet/model/authority-membership'
 
 export type AuthorityOption = {
 	id: string
@@ -53,7 +54,9 @@ export function AuthoritySelectionPhase({
 	onBack,
 }: Props) {
 	const selectedOption = options.find((option) => option.id === selectedAuthorityId) ?? null
-	const canContinue = !isChecking && selectedOption?.enabled === true
+	// Only ASM-backed roles wait for the membership check; payouts must work without the ASM.
+	const selectedIsChecking = isChecking && needsMembershipCheck(selectedOption?.role ?? null)
+	const canContinue = !selectedIsChecking && selectedOption?.enabled === true
 	const continueButtonClassName = canContinue
 		? 'rounded-lg border border-[#0a0a0a] bg-[#0a0a0a] px-5 py-2 text-body font-medium text-white transition hover:bg-[#2a2a2a]'
 		: 'rounded-lg border border-[#0a0a0a] bg-[#a3a3a3] px-5 py-2 text-body font-medium text-white'
@@ -89,14 +92,14 @@ export function AuthoritySelectionPhase({
 			<div className="mt-5 space-y-3">
 				{options.map((option) => {
 					const isSelected = selectedAuthorityId === option.id
-					const isDisabled = isChecking || !option.enabled
-					const badgeLabel = isChecking && option.role !== null ? 'Checking…' : option.availabilityLabel
-					const badgeClassName =
-						isChecking && option.role !== null
-							? 'border-[#e5e7eb] bg-white text-[#9ca3af]'
-							: option.enabled
-								? 'border-[#a7f3d0] bg-[#ecfdf5] text-[#059669]'
-								: 'border-[#e5e7eb] bg-white text-[#6b7280]'
+					const optionIsChecking = isChecking && needsMembershipCheck(option.role)
+					const isDisabled = optionIsChecking || !option.enabled
+					const badgeLabel = optionIsChecking ? 'Checking…' : option.availabilityLabel
+					const badgeClassName = optionIsChecking
+						? 'border-[#e5e7eb] bg-white text-[#9ca3af]'
+						: option.enabled
+							? 'border-[#a7f3d0] bg-[#ecfdf5] text-[#059669]'
+							: 'border-[#e5e7eb] bg-white text-[#6b7280]'
 
 					const iconBgClass = isSelected
 						? 'bg-accent-surface text-emphasis'
@@ -132,7 +135,7 @@ export function AuthoritySelectionPhase({
 										<span
 											className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[0.68rem] font-medium ${badgeClassName}`}
 										>
-											{option.enabled && !isChecking && (
+											{option.enabled && !optionIsChecking && (
 												<svg
 													width="12"
 													height="12"

@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     ));
     warn_without_txindex(btc_client.clone());
 
-    application::payout_deployment::load_payout_deployment(&config)?;
+    let deployment = application::payout_deployment::load_payout_deployment(&config)?;
 
     let state = if let Some(database_url) = &config.database_url {
         let pool = PgPoolOptions::new()
@@ -71,6 +71,10 @@ async fn main() -> anyhow::Result<()> {
             config.bitcoin_network,
         )
     };
+
+    let state = state.with_payouts(
+        deployment.map(|dep| Arc::new(application::payouts::PayoutService::new(Arc::new(dep)))),
+    );
 
     let cors = CorsLayer::new()
         .allow_methods([

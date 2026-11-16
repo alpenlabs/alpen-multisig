@@ -13,6 +13,10 @@ pub fn attach_invoke_handlers(builder: tauri::Builder<Wry>) -> tauri::Builder<Wr
 
 fn attach_production(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
     builder.invoke_handler(tauri::generate_handler![
+        super::payouts::payout_load_deployment,
+        super::payouts::payout_sign_in_review,
+        super::payouts::payout_sign_in,
+        super::payouts::payout_sign_out,
         super::asm_state::get_multisig_config,
         super::asm_state::check_authority_memberships,
         super::asm_state::get_current_vk,
@@ -91,6 +95,10 @@ fn attach_production(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
 
 fn attach_with_dev_signing(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
     builder.invoke_handler(tauri::generate_handler![
+        super::payouts::payout_load_deployment,
+        super::payouts::payout_sign_in_review,
+        super::payouts::payout_sign_in,
+        super::payouts::payout_sign_out,
         super::asm_state::get_multisig_config,
         super::asm_state::check_authority_memberships,
         super::asm_state::get_current_vk,

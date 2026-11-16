@@ -19,6 +19,10 @@ use std::time::Duration;
 use super::{AddressScriptType, HwWalletInfo};
 use crate::infrastructure::signing::SignatureResult;
 
+pub mod payout;
+mod payout_diagnostics;
+use payout_diagnostics::{log_exchange_timing, StatusHex};
+
 /// Ledger HID and Speculos HTTP only handle one APDU exchange at a time.
 static LEDGER_DEVICE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -124,11 +128,18 @@ where
 struct HidTransport(TransportNativeHID);
 
 #[derive(Debug)]
-struct HidError(LedgerHIDError);
+enum HidError {
+    Hid(LedgerHIDError),
+    /// A status word the Bitcoin client does not know (e.g. the device's own "locked" answer).
+    Status(StatusHex),
+}
 
 impl std::fmt::Display for HidError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Ledger HID error: {}", self.0)
+        match self {
+            HidError::Hid(e) => write!(f, "Ledger HID error: {e}"),
+            HidError::Status(s) => write!(f, "Ledger answered status {s:?}"),
+        }
     }
 }
 
@@ -144,10 +155,12 @@ impl async_client::Transport for HidTransport {
             p2: cmd.p2,
             data: cmd.data.clone(),
         };
-        let answer = self.0.exchange(&zondax_cmd).map_err(HidError)?;
+        let started = std::time::Instant::now();
+        let answer = self.0.exchange(&zondax_cmd).map_err(HidError::Hid)?;
         let retcode = answer.retcode();
-        let status = StatusWord::try_from(retcode)
-            .map_err(|_| HidError(LedgerHIDError::Comm("unknown status word")))?;
+        log_exchange_timing(cmd, started, retcode);
+        let status =
+            StatusWord::try_from(retcode).map_err(|_| HidError::Status(StatusHex(retcode)))?;
         Ok((status, answer.apdu_data().to_vec()))
     }
 }
@@ -429,6 +442,13 @@ fn map_ledger_error(op: &str, raw: &str) -> String {
             "Ledger rejected this derivation path — test networks (Local/regtest, testnet, signet) \
              need the {BITCOIN_TEST_APP} app; mainnet needs the {BITCOIN_APP} app. Open the right \
              app and try again"
+        )
+    } else if raw.contains("Status(0x5515)") {
+        "Your Ledger is locked — unlock it with your PIN and try again".to_string()
+    } else if raw.contains("Status(0x6511)") || raw.contains("Status(0x6d02)") {
+        format!(
+            "No app is open on your Ledger — open the {BITCOIN_APP} or {BITCOIN_TEST_APP} app and \
+             try again"
         )
     } else if raw.contains("Deny") {
         "Request rejected on device — confirm the operation on your Ledger".to_string()

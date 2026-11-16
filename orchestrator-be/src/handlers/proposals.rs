@@ -2,7 +2,7 @@ use crate::{
     application::proposals,
     domain::proposal::{ActionId, Proposal, ProposalSignature, ProposalStatus},
     error::{AppError, Result},
-    handlers::auth_session::AuthenticatedSession,
+    handlers::auth_session::GovernanceSession,
     infrastructure::{action_codec, asm_role_membership},
     state::AppState,
 };
@@ -100,7 +100,7 @@ async fn proposal_response(state: &AppState, proposal: Proposal) -> ProposalResp
 
 pub async fn create_proposal(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Json(body): Json<CreateProposalRequest>,
 ) -> Result<(StatusCode, Json<ProposalResponse>)> {
     let sig = ProposalSignature {
@@ -137,7 +137,7 @@ pub async fn create_proposal(
 
 pub async fn get_next_seq_no(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
 ) -> Result<Json<NextSeqNoResponse>> {
     let next_seq_no = proposals::next_seq_no_for_authority(
         state.repo.as_ref(),
@@ -151,7 +151,7 @@ pub async fn get_next_seq_no(
 #[tracing::instrument(skip(state, auth), fields(authority = ?auth.authority))]
 pub async fn list_proposals(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Query(query): Query<ListProposalsQuery>,
 ) -> Result<Json<ProposalListResponse>> {
     proposals::reconcile_enacted_for_authority(
@@ -196,7 +196,7 @@ pub async fn list_proposals(
 #[tracing::instrument(skip(state, auth), fields(action_id, authority = ?auth.authority))]
 pub async fn get_proposal(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
 ) -> Result<Json<ProposalDetailResponse>> {
     let action_id = ActionId(action_id);
@@ -246,7 +246,7 @@ pub async fn get_proposal(
 #[tracing::instrument(skip(state, auth), fields(action_id, authority = ?auth.authority))]
 pub async fn get_cancel_target_status(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
 ) -> Result<Json<CancelTargetStatusResponse>> {
     let action_id = ActionId(action_id);
@@ -267,7 +267,7 @@ pub struct CreateCancelProposalRequest {
 
 pub async fn create_cancel_proposal(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
     Json(body): Json<CreateCancelProposalRequest>,
 ) -> Result<Json<ProposalResponse>> {
@@ -295,7 +295,7 @@ pub async fn create_cancel_proposal(
 #[tracing::instrument(skip(state, auth, body), fields(action_id, authority = ?auth.authority))]
 pub async fn approve_action(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
     Json(body): Json<ApproveActionRequest>,
 ) -> Result<Json<ProposalResponse>> {
@@ -327,7 +327,7 @@ pub struct PatchProposalBody {
 #[tracing::instrument(skip(state, auth, body), fields(action_id, authority = ?auth.authority))]
 pub async fn patch_proposal(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
     Json(body): Json<PatchProposalBody>,
 ) -> Result<Json<ProposalResponse>> {
@@ -356,7 +356,7 @@ pub async fn patch_proposal(
 #[tracing::instrument(skip(state, auth), fields(action_id, authority = ?auth.authority))]
 pub async fn claim_broadcast(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
 ) -> Result<Json<ProposalResponse>> {
     let action_id = ActionId(action_id);
@@ -381,7 +381,7 @@ pub struct RegisterBroadcastAttemptBody {
 #[tracing::instrument(skip(state, auth, body), fields(action_id, authority = ?auth.authority))]
 pub async fn register_broadcast_attempt(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
     Json(body): Json<RegisterBroadcastAttemptBody>,
 ) -> Result<Json<ProposalResponse>> {
@@ -407,7 +407,7 @@ pub async fn register_broadcast_attempt(
 #[tracing::instrument(skip(state, auth), fields(action_id, authority = ?auth.authority))]
 pub async fn check_broadcast_attempt(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
 ) -> Result<Json<ProposalResponse>> {
     let action_id = ActionId(action_id);
@@ -438,7 +438,7 @@ pub struct ReportBroadcastProgressBody {
 #[tracing::instrument(skip(state, auth, body), fields(action_id, authority = ?auth.authority))]
 pub async fn report_broadcast_progress(
     State(state): State<AppState>,
-    auth: AuthenticatedSession,
+    auth: GovernanceSession,
     Path(action_id): Path<String>,
     Json(body): Json<ReportBroadcastProgressBody>,
 ) -> Result<Json<ProposalResponse>> {

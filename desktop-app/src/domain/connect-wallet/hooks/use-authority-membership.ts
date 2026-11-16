@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react'
 import { checkAuthorityMemberships } from '@/api/asm-state'
 import type { AuthorityOption } from '@/domain/connect-wallet/components/authority-selection-phase'
-import { AuthRole } from '@/types'
-
-// Roles not backed by ASM state — skip membership check and preserve static config
-const ASM_EXEMPT_ROLES = new Set<AuthRole>([AuthRole.PayoutAdministrator])
+import { needsMembershipCheck } from '@/domain/connect-wallet/model/authority-membership'
 
 type Result = {
 	resolvedOptions: AuthorityOption[]
@@ -33,7 +30,8 @@ export function useAuthorityMembership(signerPubkeyHex: string | null, options: 
 
 			setResolvedOptions(
 				options.map((option) => {
-					if (option.role === null || ASM_EXEMPT_ROLES.has(option.role)) return option
+					// Roles not backed by ASM state keep their static config
+					if (option.role === null || !needsMembershipCheck(option.role)) return option
 
 					const isMember = memberships[option.role] === true
 					return {

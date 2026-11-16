@@ -51,6 +51,15 @@ const AUTHORITY_OPTIONS: AuthorityOption[] = [
 		availabilityLabel: 'Available',
 		enabled: true,
 	},
+	{
+		id: 'payout-administrator',
+		role: AuthRole.PayoutAdministrator,
+		label: 'Payout Administrator',
+		description: 'Block payouts of operators reported for false claims (Ledger only).',
+		signerSetSource: 'strata-bridge params.toml',
+		availabilityLabel: 'Available',
+		enabled: true,
+	},
 ]
 
 export function WalletConnectScreen() {

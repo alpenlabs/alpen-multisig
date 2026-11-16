@@ -34,6 +34,7 @@ fn main() {
                 init_app_data_dir(data_dir);
             }
 
+            app.manage(desktop_app::application::payouts::PayoutState::ledger());
             let config = load_node_config(app.handle());
             let node_config_arc = Arc::new(RwLock::new(config));
             let wallet_session = WalletSession::with_node_config(Arc::clone(&node_config_arc));

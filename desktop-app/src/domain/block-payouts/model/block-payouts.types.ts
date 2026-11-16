@@ -1,3 +1,4 @@
+import type { LedgerReview } from '@/api/payouts'
 export type BlockPayoutInput = {
 	outpoint: string
 	amount: number
@@ -41,3 +42,19 @@ export type FalseClaimReport = {
 export type ParsedReport = { valid: true; report: FalseClaimReport } | { valid: false; reason: string; raw: string }
 
 export type ActiveModal = { kind: 'sign'; txId: string } | { kind: 'paste'; txId: string } | { kind: 'create' } | null
+
+export type PayoutSignIn =
+	| { phase: 'idle' }
+	| { phase: 'loading' }
+	/** The Ledger is connected; it will show `review` when it signs the sign-in message. */
+	| { phase: 'review'; review: LedgerReview }
+	| { phase: 'signing'; review: LedgerReview }
+	| { phase: 'error'; message: string }
+	| {
+			phase: 'signed-in'
+			adminLabel: string
+			threshold: number
+			adminCount: number
+			network: string
+			ledgerApp: string
+	  }
