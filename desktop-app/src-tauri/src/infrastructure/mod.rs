@@ -64,3 +64,5 @@ pub mod tx_lookups;
 pub mod payout_coordinator;
 
 pub mod payout_node;
+
+pub mod payout_policy_store;
