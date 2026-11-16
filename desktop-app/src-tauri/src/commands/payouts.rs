@@ -62,3 +62,17 @@ pub async fn payout_verify_reports(
     let in_pending = std::collections::HashSet::new();
     payouts::verify_reports(&ctx.dep, &text, &node, &in_pending).await
 }
+
+use desktop_app::application::payouts::{PlanDto, PlanRequest};
+#[tauri::command]
+pub async fn payout_plan(
+    request: PlanRequest,
+    cfg: tauri::State<'_, NodeConfigState>,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<PlanDto, String> {
+    let ctx = state.ctx().await?;
+    let node = node(&cfg)?;
+    payouts::plan_for(&ctx, &request, &node, false)
+        .await
+        .map(|(p, _, _)| p)
+}

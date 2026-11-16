@@ -1,7 +1,7 @@
 import { useCreateBlockPayout } from '../hooks/use-create-block-payout'
 function CreateFlow({ onClose }: { onClose: () => void }) {
 	const flow = useCreateBlockPayout()
-	return <CreateBlockPayoutModal flow={flow} onClose={onClose} />
+	return <CreateBlockPayoutModal unit="TEST" flow={flow} onClose={onClose} />
 }
 import type { BlockPayoutsHook, Tab } from '../hooks/use-block-payouts'
 import { PendingTransactionsList } from './pending-transactions-list'

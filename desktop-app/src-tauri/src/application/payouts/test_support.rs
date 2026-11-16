@@ -9,6 +9,7 @@ pub(super) fn signed_in(
     coordinator: PayoutCoordinator,
 ) -> PayoutContext {
     PayoutContext {
+        coins: Default::default(),
         app: check_ledger_app(dep, "Bitcoin Test", "2.5.1").unwrap(),
         dep: Arc::new(dep.clone()),
         me: me.clone(),

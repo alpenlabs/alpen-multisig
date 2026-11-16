@@ -252,6 +252,7 @@ impl PayoutState {
     pub fn new(device: Arc<dyn PayoutDevice>) -> Self {
         Self {
             inner: tokio::sync::Mutex::new(SessionInner::default()),
+            coins: Default::default(),
 
             device,
         }
@@ -312,6 +313,7 @@ impl PayoutState {
                 app: app.clone(),
                 coordinator: c.clone(),
                 device: self.device.clone(),
+                coins: self.coins.clone(),
             }),
             _ => Err(MSG_NOT_SIGNED_IN.into()),
         }

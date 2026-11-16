@@ -32,4 +32,3 @@ export type LedgerDetail = z.infer<typeof LedgerDetailSchema>
 export type LedgerStep = z.infer<typeof LedgerStepSchema>
 
 export type LedgerReview = z.infer<typeof LedgerReviewSchema>
-

@@ -22,6 +22,7 @@ pub trait PayoutNode: Send + Sync {
     async fn tx(&self, txid: &Txid) -> Result<Option<NodeTx>, String>;
     async fn unspent(&self, outpoint: &OutPoint, include_mempool: bool) -> Result<bool, String>;
     async fn tip(&self) -> Result<u64, String>;
+    async fn scan(&self, descriptors: &[String]) -> Result<Vec<ScannedCoin>, String>;
 }
 const RPC_NOT_FOUND: i64 = -5;
 #[async_trait]
@@ -81,5 +82,85 @@ impl PayoutNode for HttpBitcoinRpcClient {
             .map_err(|e| e.message)?
             .as_u64()
             .ok_or_else(|| "getblockcount: expected a number".to_string())
+    }
+    async fn scan(&self, descriptors: &[String]) -> Result<Vec<ScannedCoin>, String> {
+        let objs: Vec<Value> = descriptors
+            .iter()
+            .map(|d| json!({ "desc": d, "range": SCAN_RANGE }))
+            .collect();
+        let v = self
+            .rpc_with_timeout("scantxoutset", json!(["start", objs]), SCAN_TIMEOUT)
+            .await
+            .map_err(|e| e.message)?;
+        let unspents = v
+            .get("unspents")
+            .and_then(Value::as_array)
+            .ok_or("scantxoutset: no unspents")?;
+        unspents
+            .iter()
+            .map(|u| {
+                let field = |k: &str| u.get(k).ok_or(format!("scantxoutset: no {k}"));
+                let txid: Txid = field("txid")?
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or("scantxoutset: bad txid")?;
+                let vout = field("vout")?.as_u64().ok_or("scantxoutset: bad vout")? as u32;
+                let amount = field("amount")?
+                    .as_f64()
+                    .ok_or("scantxoutset: bad amount")?;
+                let value_sat = bitcoin::Amount::from_btc(amount)
+                    .map_err(|e| format!("scantxoutset: {e}"))?
+                    .to_sat();
+                let script = field("scriptPubKey")?
+                    .as_str()
+                    .and_then(|s| bitcoin::ScriptBuf::from_hex(s).ok())
+                    .ok_or("scantxoutset: bad scriptPubKey")?;
+                Ok(ScannedCoin {
+                    outpoint: OutPoint::new(txid, vout),
+                    value_sat,
+                    script_pubkey: script,
+                    desc: field("desc")?.as_str().unwrap_or_default().to_string(),
+                    height: field("height")?.as_u64().unwrap_or(0),
+                })
+            })
+            .collect()
+    }
+}
+/// One `scantxoutset` result.
+#[derive(Debug, Clone)]
+pub struct ScannedCoin {
+    pub outpoint: OutPoint,
+    pub value_sat: u64,
+    pub script_pubkey: bitcoin::ScriptBuf,
+    /// The inferred descriptor, with the key origin (`…/branch/index`).
+    pub desc: String,
+    pub height: u64,
+}
+
+/// `(branch, index)` from a `scantxoutset` descriptor like `tr([fp/86h/1h/73h/1/5]…)#…`.
+pub fn branch_index_of(desc: &str) -> Option<(u32, u32)> {
+    let origin = desc.split('[').nth(1)?.split(']').next()?;
+    let mut parts = origin.rsplit('/');
+    let index = parts.next()?.parse().ok()?;
+    let branch = parts.next()?.parse().ok()?;
+    Some((branch, index))
+}
+
+/// Address indexes scanned per branch of the Admin Wallet.
+pub const SCAN_RANGE: u32 = 1_000;
+
+/// How long `scantxoutset` may take. It reads the whole UTXO set, which on mainnet takes well over
+/// the 30 seconds other RPC calls get.
+pub const SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn branch_index_from_descriptor() {
+        assert_eq!(
+            super::branch_index_of("tr([0a1b2c3d/86h/1h/73h/1/5]03ab)#xyz"),
+            Some((1, 5))
+        );
+        assert_eq!(super::branch_index_of("raw(00)"), None);
     }
 }

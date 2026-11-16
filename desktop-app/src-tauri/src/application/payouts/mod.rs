@@ -18,6 +18,7 @@ pub const PAYOUT_AUTHORITY: &str = "payout_admin";
 /// State behind the Block Payouts commands: the deployment loaded from params.toml, which admin
 /// the connected Ledger is, and the coordinator session.
 pub struct PayoutState {
+    coins: CoinCache,
     inner: tokio::sync::Mutex<SessionInner>,
     device: Arc<dyn PayoutDevice>,
 }
@@ -37,6 +38,7 @@ struct SessionInner {
 pub type Ctx = PayoutContext;
 
 pub struct PayoutContext {
+    pub coins: CoinCache,
     pub dep: Arc<Deployment>,
     pub me: AdminSigner,
     pub app: LedgerApp,
@@ -63,3 +65,14 @@ use payout_admin_core::report::{self, ConnectorState, MinedTx, VerifiedReport};
 use std::collections::{BTreeSet, HashMap, HashSet};
 mod reports;
 pub use reports::*;
+
+use crate::infrastructure::payout_node::branch_index_of;
+use bitcoin::{bip32::ChildNumber, key::Secp256k1, ScriptBuf};
+use payout_admin_core::policy;
+use serde::Deserialize;
+mod wallet;
+pub use wallet::*;
+mod plan;
+pub use plan::*;
+pub type CoinCache = Arc<tokio::sync::Mutex<Option<(std::time::Instant, usize, Vec<WalletCoin>)>>>;
+pub const COIN_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
