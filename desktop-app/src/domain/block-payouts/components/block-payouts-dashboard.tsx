@@ -1,3 +1,8 @@
+import { useCreateBlockPayout } from '../hooks/use-create-block-payout'
+function CreateFlow({ onClose }: { onClose: () => void }) {
+	const flow = useCreateBlockPayout()
+	return <CreateBlockPayoutModal flow={flow} onClose={onClose} />
+}
 import type { BlockPayoutsHook, Tab } from '../hooks/use-block-payouts'
 import { PendingTransactionsList } from './pending-transactions-list'
 import { PastTransactionsList } from './past-transactions-list'
@@ -32,7 +37,6 @@ export function BlockPayoutsDashboard({
 	handleCopySignatures,
 	handleRebroadcast,
 	handleCopyRawTx,
-	handleCreateTx,
 }: Props) {
 	const signTx = activeModal?.kind === 'sign' ? (pendingTxs.find((t) => t.id === activeModal.txId) ?? null) : null
 	const pasteTxId = activeModal?.kind === 'paste' ? activeModal.txId : null
@@ -113,9 +117,7 @@ export function BlockPayoutsDashboard({
 				<PasteSignaturesModal txId={pasteTxId} onSubmit={handlePasteSignatures} onClose={closeModal} />
 			)}
 
-			{activeModal?.kind === 'create' && (
-				<CreateBlockPayoutModal walletBalanceSats={500_000} onConfirm={handleCreateTx} onClose={closeModal} />
-			)}
+			{activeModal?.kind === 'create' && <CreateFlow onClose={closeModal} />}
 
 			{/* Toast */}
 			{toast && (

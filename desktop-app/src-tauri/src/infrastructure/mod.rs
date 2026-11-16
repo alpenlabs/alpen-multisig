@@ -62,3 +62,5 @@ pub mod signing;
 pub mod tx_lookups;
 
 pub mod payout_coordinator;
+
+pub mod payout_node;

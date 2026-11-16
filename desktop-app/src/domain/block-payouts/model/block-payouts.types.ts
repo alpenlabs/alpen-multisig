@@ -58,3 +58,5 @@ export type PayoutSignIn =
 			network: string
 			ledgerApp: string
 	  }
+
+export type ReportRow = import('@/api/payouts').VerifiedReport

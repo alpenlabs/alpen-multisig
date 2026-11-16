@@ -113,11 +113,18 @@ impl HttpBitcoinRpcClient {
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.call_typed(method, params).await.map_err(|e| e.message)
+        self.call_typed(method, params, None)
+            .await
+            .map_err(|e| e.message)
     }
 
     /// Like [`Self::call`], keeping how the call failed (#516).
-    async fn call_typed(&self, method: &str, params: Value) -> Result<Value, RpcError> {
+    async fn call_typed(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Value, RpcError> {
         let payload = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -125,21 +132,22 @@ impl HttpBitcoinRpcClient {
             "params": params,
         });
 
-        let resp = self
+        let mut request = self
             .client
             .post(&self.url)
             .basic_auth(&self.user, Some(&self.pass))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| {
-                let message = format!("bitcoin rpc send failed: {e}");
-                if e.is_connect() {
-                    RpcError::not_connected(message)
-                } else {
-                    RpcError::unknown(message)
-                }
-            })?;
+            .json(&payload);
+        if let Some(t) = timeout {
+            request = request.timeout(t);
+        }
+        let resp = request.send().await.map_err(|e| {
+            let message = format!("bitcoin rpc send failed: {e}");
+            if e.is_connect() {
+                RpcError::not_connected(message)
+            } else {
+                RpcError::unknown(message)
+            }
+        })?;
 
         let status = resp.status();
         // Bitcoin Core answers an RPC error with a JSON body carrying `error`, often under an
@@ -237,7 +245,7 @@ fn parse_min_relay(network_info: &Value, mempool_info: &Value) -> u64 {
 impl BitcoinRpcClient for HttpBitcoinRpcClient {
     async fn send_raw_transaction(&self, tx_hex: &str) -> Result<String, RpcError> {
         let result = self
-            .call_typed("sendrawtransaction", json!([tx_hex]))
+            .call_typed("sendrawtransaction", json!([tx_hex]), None)
             .await?;
         result
             .as_str()
@@ -292,7 +300,7 @@ impl BitcoinRpcClient for HttpBitcoinRpcClient {
 
     async fn submit_package(&self, tx_hexes: &[String]) -> Result<(), RpcError> {
         let result = self
-            .call_typed("submitpackage", serde_json::json!([tx_hexes]))
+            .call_typed("submitpackage", serde_json::json!([tx_hexes]), None)
             .await?;
         let pkg_msg = result
             .get("package_msg")
@@ -312,7 +320,7 @@ impl BitcoinRpcClient for HttpBitcoinRpcClient {
 
     async fn get_transaction_depth(&self, txid: &str) -> Result<u32, RpcError> {
         let result = self
-            .call_typed("getrawtransaction", json!([txid, true]))
+            .call_typed("getrawtransaction", json!([txid, true]), None)
             .await?;
         // A mempool transaction carries no `confirmations`.
         let confirmations = result
@@ -541,3 +549,5 @@ mod tests {
         assert_eq!(btc_per_kvb_to_sat_per_kvb(0.0), 1);
     }
 }
+
+mod payout;

@@ -8,3 +8,5 @@ pub mod test_support;
 pub use deployment::{AdminSigner, Covenant, Deployment, DeploymentError, SignerRoster};
 
 pub mod wire;
+
+pub mod report;

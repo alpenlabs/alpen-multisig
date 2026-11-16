@@ -7,4 +7,3 @@ export function formatAmount(sats: number, unit: string): string {
 	const btc = frac === '' ? String(whole) : `${whole}.${frac}`
 	return `${btc} ${unit} (${sats.toLocaleString('en-US')} sats)`
 }
-

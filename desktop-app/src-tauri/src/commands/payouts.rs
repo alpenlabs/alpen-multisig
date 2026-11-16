@@ -39,3 +39,26 @@ pub async fn payout_sign_out(state: tauri::State<'_, PayoutState>) -> Result<(),
     state.sign_out().await;
     Ok(())
 }
+
+use desktop_app::application::payouts::VerifyReportsDto;
+use desktop_app::infrastructure::bitcoin_rpc::HttpBitcoinRpcClient;
+fn node(cfg: &tauri::State<'_, NodeConfigState>) -> Result<HttpBitcoinRpcClient, String> {
+    let c = cfg.0.read().map_err(|e| format!("lock error: {e}"))?;
+    Ok(HttpBitcoinRpcClient::new(
+        c.btc_rpc_url(),
+        c.btc_rpc_user(),
+        c.btc_rpc_pass(),
+    ))
+}
+
+#[tauri::command]
+pub async fn payout_verify_reports(
+    text: String,
+    cfg: tauri::State<'_, NodeConfigState>,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<VerifyReportsDto, String> {
+    let ctx = state.ctx().await?;
+    let node = node(&cfg)?;
+    let in_pending = std::collections::HashSet::new();
+    payouts::verify_reports(&ctx.dep, &text, &node, &in_pending).await
+}
