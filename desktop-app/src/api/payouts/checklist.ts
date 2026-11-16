@@ -35,6 +35,9 @@ export type LedgerStep = z.infer<typeof LedgerStepSchema>
 
 export type LedgerReview = z.infer<typeof LedgerReviewSchema>
 
+/** What the Ledger will show when signing a pending transaction. */
+export const payoutReviewSign = payoutCall('payout_review_sign', LedgerReviewSchema, (txid: string) => ({ txid }))
+
 /** What the Ledger will show when Confirm signs the planned transactions. */
 export const payoutReviewConfirm = payoutCall('payout_review_confirm', LedgerReviewSchema, (request: PlanRequest) => ({
 	request,

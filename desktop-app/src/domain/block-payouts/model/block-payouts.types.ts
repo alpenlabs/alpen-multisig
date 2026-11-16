@@ -1,47 +1,8 @@
-import type { LedgerReview } from '@/api/payouts'
-export type BlockPayoutInput = {
-	outpoint: string
-	amount: number
-	claimId: string
-	isConflicting: boolean
-}
+import type { LedgerReview, PastPayout, PendingPayout, VerifiedReport } from '@/api/payouts'
 
-export type PendingBlockPayoutTx = {
-	id: string
-	inputs: BlockPayoutInput[]
-	signaturesReceived: number
-	signaturesRequired: number
-	signedByCurrentUser: boolean
-	expiresAt: Date
-	createdAt: Date
-	rawTx: string
-	signatures: string[]
-}
-
-export type PastBlockPayoutTx = {
-	id: string
-	inputs: BlockPayoutInput[]
-	status: 'unconfirmed' | 'confirmed'
-	broadcastAt: Date
-	blockTimestamp?: Date
-	rawTx: string
-}
-
-export type CreateBlockPayoutDraft = {
-	inputs: BlockPayoutInput[]
-	feeRateSatPerVb: number
-}
-
-export type FalseClaimReport = {
-	claimId: string
-	outpoint: string
-	amount: number
-	proof: string
-}
-
-export type ParsedReport = { valid: true; report: FalseClaimReport } | { valid: false; reason: string; raw: string }
-
-export type ActiveModal = { kind: 'sign'; txId: string } | { kind: 'paste'; txId: string } | { kind: 'create' } | null
+export type PendingPayoutTx = PendingPayout
+export type PastPayoutTx = PastPayout
+export type ReportRow = VerifiedReport
 
 export type PayoutSignIn =
 	| { phase: 'idle' }
@@ -59,4 +20,14 @@ export type PayoutSignIn =
 			ledgerApp: string
 	  }
 
-export type ReportRow = import('@/api/payouts').VerifiedReport
+export type ActiveModal =
+	| { kind: 'sign'; txId: string }
+	| { kind: 'paste'; txId: string }
+	| { kind: 'import' }
+	| { kind: 'create' }
+	| { kind: 'admin-wallet' }
+	| null
+
+export type Tab = 'pending' | 'past'
+
+export type Toast = { kind: 'ok' | 'error'; message: string }

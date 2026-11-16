@@ -1,20 +1,20 @@
-import { useState } from 'react'
+import { usePayoutPagination } from '../hooks/use-payout-pagination'
 import { Paginator } from '@/components/paginator'
-import type { PastBlockPayoutTx } from '../model/block-payouts.types'
-import { PastTransactionRow } from './past-transaction-row'
+import type { PastPayoutTx } from '../model/block-payouts.types'
+import { PAST_GRID, PastTransactionRow } from './past-transaction-row'
 
 type Props = {
-	txs: PastBlockPayoutTx[]
+	txs: PastPayoutTx[]
+	busyTxId: string | null
 	onRebroadcast: (txId: string) => void
 	onCopyRawTx: (txId: string) => void
 }
 
 const PAGE_SIZE = 10
 
-export function PastTransactionsList({ txs, onRebroadcast, onCopyRawTx }: Props) {
-	const [page, setPage] = useState(1)
-	const totalPages = Math.ceil(txs.length / PAGE_SIZE)
-	const paged = txs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+export function PastTransactionsList({ txs, busyTxId, onRebroadcast, onCopyRawTx }: Props) {
+	const { page, totalPages, start, end, setPage } = usePayoutPagination(txs.length, PAGE_SIZE)
+	const paged = txs.slice(start, end)
 
 	if (txs.length === 0) {
 		return (
@@ -26,25 +26,28 @@ export function PastTransactionsList({ txs, onRebroadcast, onCopyRawTx }: Props)
 					</svg>
 				</div>
 				<p className="m-0 font-display text-heading text-[#0a0a0a]">No past transactions</p>
-				<p className="m-0 mt-1.5 text-body-sm text-[#6b7280]">Sent transactions will appear here.</p>
+				<p className="m-0 mt-1.5 text-body-sm text-[#6b7280]">Broadcast transactions will appear here.</p>
 			</div>
 		)
 	}
 
 	return (
 		<div className="flex flex-col gap-2.5">
-			<div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 pb-1">
+			<div className={`${PAST_GRID} px-5 pb-1`}>
 				<span className="text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">Transaction ID</span>
 				<span className="text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">Status</span>
-				<span className="text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">Timestamp</span>
+				<span className="text-right text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">
+					Block time
+				</span>
 				<span />
 			</div>
 			{paged.map((tx) => (
 				<PastTransactionRow
-					key={tx.id}
+					key={tx.txid}
 					tx={tx}
-					onRebroadcast={() => onRebroadcast(tx.id)}
-					onCopyRawTx={() => onCopyRawTx(tx.id)}
+					isBusy={busyTxId === tx.txid}
+					onRebroadcast={() => onRebroadcast(tx.txid)}
+					onCopyRawTx={() => onCopyRawTx(tx.txid)}
 				/>
 			))}
 			<Paginator page={page} totalPages={totalPages} onPageChange={setPage} />

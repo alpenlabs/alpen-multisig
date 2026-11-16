@@ -1,51 +1,48 @@
+import { PayoutButton } from './payout-button'
+import { PayoutCopyIcon } from './payout-icons'
+import { PayoutModal, PayoutHeading } from './payout-modal'
 import { writeClipboard } from '@/api/tauri-bridge'
 import { useState } from 'react'
-import type { PasteResult } from '../hooks/use-block-payouts'
+import type { PasteOutcome } from '../hooks/use-block-payouts'
 
 type Props = {
-	txId: string
-	onSubmit: (txId: string, raw: string) => PasteResult
+	title: string
+	description: string
+	placeholder: string
+	onSubmit: (raw: string) => Promise<PasteOutcome>
 	onClose: () => void
 }
 
-export function PasteSignaturesModal({ txId, onSubmit, onClose }: Props) {
+/** Paste signatures (one per line) or import a transaction; the app reports what it could not use. */
+export function PasteSignaturesModal({ title, description, placeholder, onSubmit, onClose }: Props) {
 	const [raw, setRaw] = useState('')
-	const [result, setResult] = useState<PasteResult | null>(null)
+	const [result, setResult] = useState<PasteOutcome | null>(null)
+	const [isBusy, setIsBusy] = useState(false)
 
-	function handleSubmit() {
-		const res = onSubmit(txId, raw)
+	async function handleSubmit() {
+		setIsBusy(true)
+		const res = await onSubmit(raw)
+		setIsBusy(false)
 		setResult(res)
 		if (res.ok) {
 			onClose()
 		}
 	}
 
-	function buildErrorMessage(invalid: string[]): string {
-		if (invalid.length === 1) {
-			return `Warning: Invalid signature. Please provide a valid signature.\n${invalid[0]}`
-		}
-		return `Warning: Invalid signatures. Please provide valid signatures.\n${invalid.join('\n')}`
-	}
-
-	const errorMessage = result && !result.ok ? buildErrorMessage(result.invalidSignatures) : null
+	const errorMessage = result && !result.ok ? result.message : null
 
 	function handleCopyError() {
 		if (errorMessage) void writeClipboard(errorMessage)
 	}
 
 	return (
-		<Backdrop onClose={onClose}>
+		<PayoutModal onClose={onClose}>
 			<div className="flex flex-col gap-5">
-				<div>
-					<h2 className="m-0 font-display text-display-sm font-normal text-[#0a0a0a]">Paste signatures</h2>
-					<p className="m-0 mt-1 text-body-sm text-[#6b7280]">
-						Paste one signature per line. Valid signatures will be added to the transaction.
-					</p>
-				</div>
+				<PayoutHeading title={title}>{description}</PayoutHeading>
 
 				<textarea
 					className="h-36 w-full resize-none rounded-xl border border-[#e5e7eb] bg-bg-base px-4 py-3 font-mono text-label text-[#0a0a0a] outline-none transition focus:border-[#0a0a0a] focus:bg-white"
-					placeholder="Paste signatures here, one per line…"
+					placeholder={placeholder}
 					value={raw}
 					onChange={(e) => {
 						setRaw(e.target.value)
@@ -56,56 +53,29 @@ export function PasteSignaturesModal({ txId, onSubmit, onClose }: Props) {
 
 				{errorMessage && (
 					<div className="rounded-xl border border-danger-border bg-danger-surface px-4 py-3">
-						<pre className="m-0 whitespace-pre-wrap font-mono text-label text-danger-deep">{errorMessage}</pre>
-						<button
-							type="button"
-							className="mt-2.5 inline-flex items-center gap-1.5 rounded-md border border-danger-border-soft bg-white px-3 py-1 text-label font-medium text-danger-strong transition hover:bg-danger-surface"
-							onClick={handleCopyError}
-						>
-							<svg width={12} height={12} viewBox="0 0 24 24" fill="none" aria-hidden>
-								<rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.5" />
-								<path
-									d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-									stroke="currentColor"
-									strokeWidth="1.5"
-								/>
-							</svg>
+						<pre className="m-0 max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-label text-danger-deep">
+							{errorMessage}
+						</pre>
+						<PayoutButton appearance="copyError" onClick={handleCopyError}>
+							<PayoutCopyIcon size={12} />
 							Copy error
-						</button>
+						</PayoutButton>
 					</div>
 				)}
 
 				<div className="flex items-center justify-end gap-2.5">
-					<button
-						type="button"
-						className="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-body-sm font-medium text-[#374151] transition hover:bg-[#f9fafb]"
-						onClick={onClose}
-					>
+					<PayoutButton appearance="cancel" onClick={onClose}>
 						Cancel
-					</button>
-					<button
-						type="button"
-						disabled={raw.trim().length === 0}
-						className="inline-flex items-center rounded-lg border border-[#0a0a0a] bg-[#0a0a0a] px-4 py-2 text-body-sm font-medium text-white transition hover:bg-[#2a2a2a] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-						onClick={handleSubmit}
+					</PayoutButton>
+					<PayoutButton
+						disabled={raw.trim().length === 0 || isBusy}
+						appearance="import"
+						onClick={() => void handleSubmit()}
 					>
-						Import
-					</button>
+						{isBusy ? 'Importing…' : 'Import'}
+					</PayoutButton>
 				</div>
 			</div>
-		</Backdrop>
-	)
-}
-
-function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
-	return (
-		<div
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-			onClick={(e) => {
-				if (e.target === e.currentTarget) onClose()
-			}}
-		>
-			<div className="w-full max-w-120 rounded-2xl border border-[#e5e7eb] bg-white p-6 shadow-xl">{children}</div>
-		</div>
+		</PayoutModal>
 	)
 }

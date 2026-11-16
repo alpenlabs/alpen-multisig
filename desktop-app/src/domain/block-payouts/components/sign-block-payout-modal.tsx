@@ -1,37 +1,80 @@
-import type { PendingBlockPayoutTx } from '../model/block-payouts.types'
+import { PayoutButton } from './payout-button'
+import { truncate } from './modal-utils'
+import { ReviewRow as Row } from './review-controls'
+import { PayoutModal, PayoutHeading } from './payout-modal'
+import { useEffect, useState } from 'react'
+import { payoutReviewSign, type LedgerReview } from '@/api/payouts'
+import { formatAmount } from '../model/block-payouts.mapping'
+import type { PendingPayoutTx } from '../model/block-payouts.types'
+import { LedgerChecklist } from './ledger-checklist'
 
 type Props = {
-	tx: PendingBlockPayoutTx
+	tx: PendingPayoutTx
+	unit: string
+	isBusy: boolean
 	onSign: () => void
 	onClose: () => void
 }
 
-function truncate(str: string, head = 12, tail = 6): string {
-	if (str.length <= head + tail + 3) return str
-	return `${str.slice(0, head)}…${str.slice(-tail)}`
-}
-
-export function SignBlockPayoutModal({ tx, onSign, onClose }: Props) {
-	const remaining = tx.signaturesRequired - tx.signaturesReceived
+export function SignBlockPayoutModal({ tx, unit, isBusy, onSign, onClose }: Props) {
+	const [review, setReview] = useState<LedgerReview | null>(null)
+	const [reviewError, setReviewError] = useState<string | null>(null)
+	useEffect(() => {
+		let live = true
+		void payoutReviewSign(tx.txid).then((res) => {
+			if (!live) return
+			if (res.ok) setReview(res.data)
+			else setReviewError(res.error)
+		})
+		return () => {
+			live = false
+		}
+	}, [tx.txid])
+	const remaining = Math.max(tx.signaturesNeeded - tx.signaturesReceived, 0)
 
 	return (
-		<Backdrop onClose={onClose}>
+		<PayoutModal onClose={isBusy ? () => undefined : onClose}>
 			<div className="flex flex-col gap-5">
-				<div>
-					<h2 className="m-0 font-display text-display-sm font-normal text-[#0a0a0a]">Sign transaction</h2>
-					<p className="m-0 mt-1 text-body-sm text-[#6b7280]">Review the transaction details before signing.</p>
-				</div>
+				<PayoutHeading title="Sign transaction">Review the transaction details before signing.</PayoutHeading>
 
 				{/* Summary */}
 				<div className="rounded-xl border border-[#e5e7eb] bg-bg-base px-4 py-3.5">
 					<dl className="flex flex-col gap-2">
-						<Row label="Transaction ID" value={<span className="font-mono text-body-sm">{truncate(tx.id)}</span>} />
-						<Row label="Inputs" value={`${tx.inputs.length} input${tx.inputs.length !== 1 ? 's' : ''}`} />
+						<Row
+							label="Transaction ID"
+							value={<span className="font-mono text-body-sm">{truncate(tx.txid, 12, 6)}</span>}
+						/>
+						<Row
+							label="Ledger wallet name"
+							value={<span className="font-mono text-body-sm">{tx.policyNames.join(', ')}</span>}
+						/>
+						<Row label="Claim inputs" value={`${tx.connectorCount} input${tx.connectorCount !== 1 ? 's' : ''}`} />
+						<Row label="Fee (Admin Wallet)" value={`${formatAmount(tx.feeSat, unit)} · ${tx.vsize} vB`} />
+						{tx.changeAddress && (
+							<Row
+								label={`Change to ${tx.createdBy}'s Admin Wallet`}
+								value={
+									<span className="flex flex-col gap-1">
+										<span className="break-all font-mono text-label" title={tx.changeAddress}>
+											{tx.changeAddress} ({formatAmount(tx.changeSat, unit)})
+										</span>
+										{tx.changeAddressOnDevice && (
+											<span className="break-all text-label text-[#6b7280]">
+												Regtest: your Ledger shows this as{' '}
+												<span className="font-mono" title={tx.changeAddressOnDevice}>
+													{tx.changeAddressOnDevice}
+												</span>
+											</span>
+										)}
+									</span>
+								}
+							/>
+						)}
 						<Row
 							label="Signatures"
 							value={
 								<span>
-									{tx.signaturesReceived} / {tx.signaturesRequired}{' '}
+									{tx.signaturesReceived} / {tx.signaturesNeeded}{' '}
 									<span className="text-[#6b7280]">({remaining} more needed)</span>
 								</span>
 							}
@@ -39,44 +82,18 @@ export function SignBlockPayoutModal({ tx, onSign, onClose }: Props) {
 					</dl>
 				</div>
 
-				{/* Warning */}
-				<div className="flex items-start gap-2.5 rounded-xl border border-accent-border bg-highlight-surface px-4 py-3">
-					<svg
-						width={15}
-						height={15}
-						viewBox="0 0 24 24"
-						fill="none"
-						aria-hidden
-						className="mt-0.5 shrink-0 text-emphasis-soft"
-					>
-						<path
-							d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-							stroke="currentColor"
-							strokeWidth="1.5"
-							strokeLinejoin="round"
-						/>
-						<path d="M12 9v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-						<circle cx="12" cy="17" r="1" fill="currentColor" />
-					</svg>
-					<p className="m-0 text-body-sm text-emphasis">
-						You are about to sign this <strong>block_payouts</strong> transaction. This action cannot be undone.
-					</p>
-				</div>
+				<LedgerChecklist review={review} error={reviewError} unit={unit} />
+
+				<p className="m-0 text-label text-[#6b7280]">
+					Once {tx.signaturesNeeded} admins have signed, the transaction is broadcast.
+				</p>
 
 				{/* Actions */}
 				<div className="flex items-center justify-end gap-2.5">
-					<button
-						type="button"
-						className="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-body-sm font-medium text-[#374151] transition hover:bg-[#f9fafb]"
-						onClick={onClose}
-					>
+					<PayoutButton appearance="cancel" disabled={isBusy} onClick={onClose}>
 						Cancel
-					</button>
-					<button
-						type="button"
-						className="inline-flex items-center gap-1.5 rounded-lg border border-[#0a0a0a] bg-[#0a0a0a] px-4 py-2 text-body-sm font-medium text-white transition hover:bg-[#2a2a2a] active:scale-[0.98]"
-						onClick={onSign}
-					>
+					</PayoutButton>
+					<PayoutButton disabled={isBusy || review === null} appearance="sign" onClick={onSign}>
 						<svg width={13} height={13} viewBox="0 0 24 24" fill="none" aria-hidden>
 							<path d="M12 20h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
 							<path
@@ -86,32 +103,10 @@ export function SignBlockPayoutModal({ tx, onSign, onClose }: Props) {
 								strokeLinejoin="round"
 							/>
 						</svg>
-						Sign
-					</button>
+						{isBusy ? 'Confirm on your Ledger…' : 'Sign'}
+					</PayoutButton>
 				</div>
 			</div>
-		</Backdrop>
-	)
-}
-
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-	return (
-		<div className="flex items-center justify-between gap-3">
-			<dt className="text-label text-[#6b7280]">{label}</dt>
-			<dd className="m-0 text-body-sm font-medium text-[#0a0a0a]">{value}</dd>
-		</div>
-	)
-}
-
-function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
-	return (
-		<div
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-			onClick={(e) => {
-				if (e.target === e.currentTarget) onClose()
-			}}
-		>
-			<div className="w-full max-w-120 rounded-2xl border border-[#e5e7eb] bg-white p-6 shadow-xl">{children}</div>
-		</div>
+		</PayoutModal>
 	)
 }

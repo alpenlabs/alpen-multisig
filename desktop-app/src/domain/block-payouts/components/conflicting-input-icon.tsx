@@ -1,5 +1,9 @@
 import { useState } from 'react'
 
+/** PRD §6.b.iii.a, word for word. */
+const TOOLTIP =
+	'This input is included in multiple Pending transactions. To prevent double-spending, only one of these transactions can be confirmed.'
+
 export function ConflictingInputIcon() {
 	const [visible, setVisible] = useState(false)
 
@@ -12,7 +16,7 @@ export function ConflictingInputIcon() {
 				onMouseLeave={() => setVisible(false)}
 				onFocus={() => setVisible(true)}
 				onBlur={() => setVisible(false)}
-				aria-label="This input is included in multiple Pending transactions."
+				aria-label={TOOLTIP}
 			>
 				<svg width={14} height={14} viewBox="0 0 24 24" fill="none" aria-hidden>
 					<circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
@@ -25,7 +29,7 @@ export function ConflictingInputIcon() {
 					className="absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-lg border border-accent-border bg-highlight-surface px-3 py-2 text-label leading-[1.5] text-emphasis shadow-sm"
 					role="tooltip"
 				>
-					This input is included in multiple Pending transactions.
+					{TOOLTIP}
 					<span
 						className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-accent-border"
 						aria-hidden="true"

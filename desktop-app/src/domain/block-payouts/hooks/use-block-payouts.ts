@@ -1,224 +1,159 @@
 import { canStartDeviceOperation, ownsDeviceOperation } from '../model/device-operation'
-import { getOrchestratorBaseUrl } from '@/api/orchestrator-auth'
-import { payoutLoadDeployment, payoutSignInReview, payoutSignIn, payoutSignOut } from '@/api/payouts'
-import type { PayoutSignIn } from '../model/block-payouts.types'
+import { createRequestGeneration } from '../model/request-identity'
 import { writeClipboard } from '@/api/tauri-bridge'
-import { useState, useMemo, useCallback, useRef } from 'react'
-import type {
-	PendingBlockPayoutTx,
-	PastBlockPayoutTx,
-	ActiveModal,
-	BlockPayoutInput,
-} from '../model/block-payouts.types'
-import { MOCK_PENDING_TXS, MOCK_PAST_TXS } from '../model/block-payouts.mock'
+import { getOrchestratorBaseUrl } from '@/api/orchestrator-auth'
+import {
+	payoutImport,
+	payoutLoadDeployment,
+	payoutOverview,
+	payoutPasteSignatures,
+	payoutRebroadcast,
+	payoutRetryBroadcast,
+	payoutSign,
+	payoutSignaturesText,
+	payoutSignIn,
+	payoutSignInReview,
+	payoutSignOut,
+	type BroadcastResult,
+} from '@/api/payouts'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ActiveModal, PastPayoutTx, PayoutSignIn, PendingPayoutTx, Tab, Toast } from '../model/block-payouts.types'
 
-export type Tab = 'pending' | 'past'
+const POLL_MS = 15_000
 
-export type BlockPayoutsHook = {
-	activeTab: Tab
-	pendingTxs: PendingBlockPayoutTx[]
-	pastTxs: PastBlockPayoutTx[]
-	hasConflicts: boolean
-	activeModal: ActiveModal
-	toast: string | null
-	setActiveTab: (tab: Tab) => void
-	openSignModal: (txId: string) => void
-	openPasteModal: (txId: string) => void
-	openCreateModal: () => void
-	closeModal: () => void
-	handleSign: (txId: string) => void
-	handlePasteSignatures: (txId: string, raw: string) => PasteResult
-	handleExport: (txId: string) => void
-	handleCopySignatures: (txId: string) => void
-	handleRebroadcast: (txId: string) => void
-	handleCopyRawTx: (txId: string) => void
-	handleCreateTx: (inputs: BlockPayoutInput[], feeRateSatPerVb: number) => void
+/** Outcome of Paste signatures, as the modal shows it. */
+export type PasteOutcome = { ok: true } | { ok: false; message: string }
+
+function broadcastMessage(b: BroadcastResult | null, signed: string): Toast {
+	if (b === null) return { kind: 'ok', message: signed }
+	if (b.broadcast) return { kind: 'ok', message: 'Quorum reached — transaction broadcast to the Bitcoin network.' }
+	return { kind: 'error', message: `Broadcast failed: ${b.error ?? 'unknown error'}. Use Retry broadcast.` }
 }
 
-export type PasteResult = { ok: true } | { ok: false; invalidSignatures: string[] }
-
-function markConflicts(txs: PendingBlockPayoutTx[]): PendingBlockPayoutTx[] {
-	const counts = new Map<string, number>()
-	for (const tx of txs) {
-		for (const input of tx.inputs) {
-			counts.set(input.outpoint, (counts.get(input.outpoint) ?? 0) + 1)
-		}
-	}
-	return txs.map((tx) => ({
-		...tx,
-		inputs: tx.inputs.map((input) => ({
-			...input,
-			isConflicting: (counts.get(input.outpoint) ?? 0) > 1,
-		})),
-	}))
-}
-
-function isValidSignature(sig: string): boolean {
-	return sig.trim().length >= 64
-}
-
-function generateTxId(): string {
-	return Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+function downloadText(text: string, filename: string): void {
+	const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+	const a = document.createElement('a')
+	a.href = url
+	a.download = filename
+	document.body.appendChild(a)
+	a.click()
+	document.body.removeChild(a)
+	URL.revokeObjectURL(url)
 }
 
 export function useBlockPayouts() {
-	const [activeTab, setActiveTab] = useState<Tab>('pending')
-	const [rawPending, setRawPending] = useState<PendingBlockPayoutTx[]>(MOCK_PENDING_TXS)
-	const [pastTxs, setPastTxs] = useState<PastBlockPayoutTx[]>(MOCK_PAST_TXS)
-	const [activeModal, setActiveModal] = useState<ActiveModal>(null)
-	const [toast, setToast] = useState<string | null>(null)
-
-	const pendingTxs = useMemo(() => markConflicts(rawPending), [rawPending])
-	const hasConflicts = useMemo(() => pendingTxs.some((tx) => tx.inputs.some((i) => i.isConflicting)), [pendingTxs])
-
-	const showToast = useCallback((msg: string) => {
-		setToast(msg)
-		setTimeout(() => setToast(null), 3500)
-	}, [])
-
-	const openSignModal = useCallback((txId: string) => setActiveModal({ kind: 'sign', txId }), [])
-	const openPasteModal = useCallback((txId: string) => setActiveModal({ kind: 'paste', txId }), [])
-	const openCreateModal = useCallback(() => setActiveModal({ kind: 'create' }), [])
-	const closeModal = useCallback(() => setActiveModal(null), [])
-
-	const handleSign = useCallback(
-		(txId: string) => {
-			setRawPending((prev) => {
-				const updated = prev.map((tx) => {
-					if (tx.id !== txId) return tx
-					const newCount = tx.signaturesReceived + 1
-					return { ...tx, signaturesReceived: newCount, signedByCurrentUser: true }
-				})
-
-				const signed = updated.find((tx) => tx.id === txId)
-				if (signed && signed.signaturesReceived >= signed.signaturesRequired) {
-					setRawPending(updated.filter((tx) => tx.id !== txId))
-					setPastTxs((prev) => [
-						{
-							id: txId,
-							inputs: signed.inputs,
-							status: 'unconfirmed',
-							broadcastAt: new Date(),
-							rawTx: signed.rawTx,
-						},
-						...prev,
-					])
-					showToast('Quorum reached — transaction broadcast to Bitcoin network.')
-					setActiveModal(null)
-					return updated.filter((tx) => tx.id !== txId)
-				}
-
-				setActiveModal(null)
-				return updated
-			})
-		},
-		[showToast],
-	)
-
-	const handlePasteSignatures = useCallback((txId: string, raw: string): PasteResult => {
-		const lines = raw
-			.split('\n')
-			.map((l) => l.trim())
-			.filter(Boolean)
-		const invalid = lines.filter((l) => !isValidSignature(l))
-		if (invalid.length > 0) {
-			return { ok: false, invalidSignatures: invalid }
-		}
-		setRawPending((prev) =>
-			prev.map((tx) => {
-				if (tx.id !== txId) return tx
-				const newSigs = [...tx.signatures, ...lines]
-				return {
-					...tx,
-					signatures: newSigs,
-					signaturesReceived: Math.min(tx.signaturesReceived + lines.length, tx.signaturesRequired),
-				}
-			}),
-		)
-		return { ok: true }
-	}, [])
-
-	const handleExport = useCallback(
-		(txId: string) => {
-			const tx = rawPending.find((t) => t.id === txId)
-			if (!tx) return
-			const blob = new Blob([tx.rawTx], { type: 'text/plain' })
-			const url = URL.createObjectURL(blob)
-			const a = document.createElement('a')
-			a.href = url
-			a.download = `block-payout-${txId.slice(0, 8)}.txt`
-			document.body.appendChild(a)
-			a.click()
-			document.body.removeChild(a)
-			URL.revokeObjectURL(url)
-		},
-		[rawPending],
-	)
-
-	const handleCopySignatures = useCallback(
-		(txId: string) => {
-			const tx = rawPending.find((t) => t.id === txId)
-			if (!tx) return
-			void writeClipboard(tx.signatures.join('\n'))
-			showToast('Signatures copied to clipboard.')
-		},
-		[rawPending, showToast],
-	)
-
-	const handleRebroadcast = useCallback(
-		(_txId: string) => {
-			showToast('Transaction rebroadcast successfully.')
-		},
-		[showToast],
-	)
-
-	const handleCopyRawTx = useCallback(
-		(txId: string) => {
-			const tx = pastTxs.find((t) => t.id === txId)
-			if (!tx) return
-			void writeClipboard(tx.rawTx)
-			showToast('Transaction copied to clipboard.')
-		},
-		[pastTxs, showToast],
-	)
-
-	const handleCreateTx = useCallback(
-		(inputs: BlockPayoutInput[], feeRateSatPerVb: number) => {
-			const newId = `bp-pending-${generateTxId().slice(0, 8)}`
-			const now = new Date()
-			const newTx: PendingBlockPayoutTx = {
-				id: newId,
-				inputs,
-				signaturesReceived: 1,
-				signaturesRequired: 3,
-				signedByCurrentUser: true,
-				expiresAt: new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000),
-				createdAt: now,
-				rawTx: `02000000${feeRateSatPerVb.toString(16).padStart(8, '0')}${newId}`,
-				signatures: [`304402200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f200220${newId}`],
-			}
-			setRawPending((prev) => [newTx, ...prev])
-			setActiveModal(null)
-			setActiveTab('pending')
-			showToast('Transaction created and signed successfully.')
-		},
-		[showToast],
-	)
-
 	const [signIn, setSignIn] = useState<PayoutSignIn>({ phase: 'idle' })
+	const [activeTab, setActiveTab] = useState<Tab>('pending')
+	const [pendingTxs, setPendingTxs] = useState<PendingPayoutTx[]>([])
+	const [pastTxs, setPastTxs] = useState<PastPayoutTx[]>([])
+	const [nodeWarning, setNodeWarning] = useState<string | null>(null)
+	const [activeModal, setActiveModal] = useState<ActiveModal>(null)
+	const [toast, setToast] = useState<Toast | null>(null)
+	const [busyTxId, setBusyTxId] = useState<string | null>(null)
 	const deviceOwner = useRef<symbol | null>(null)
-	const device = {
-		begin: () => {
-			if (!canStartDeviceOperation(deviceOwner.current)) return null
-			const owner = Symbol('Ledger operation')
-			deviceOwner.current = owner
-			return owner
+	const [isDeviceBusy, setIsDeviceBusy] = useState(false)
+	const [overviewGeneration] = useState(createRequestGeneration)
+	const overviewActive = useRef(false)
+	const overviewPending = useRef<number | null>(null)
+	const mutations = useRef(0)
+	const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+	const isSignedIn = signIn.phase === 'signed-in'
+	const hasConflicts = useMemo(() => pendingTxs.some((tx) => tx.hasDuplicates), [pendingTxs])
+
+	const showToast = useCallback((t: Toast) => {
+		setToast(t)
+		if (toastTimer.current) clearTimeout(toastTimer.current)
+		toastTimer.current = setTimeout(() => setToast(null), t.kind === 'error' ? 8000 : 3500)
+	}, [])
+
+	useEffect(
+		() => () => {
+			if (toastTimer.current) clearTimeout(toastTimer.current)
 		},
-		end: (owner: symbol) => {
-			if (ownsDeviceOperation(deviceOwner.current, owner)) deviceOwner.current = null
+		[],
+	)
+
+	const invalidateOverview = useCallback(() => {
+		overviewGeneration.next()
+		overviewPending.current = null
+	}, [overviewGeneration])
+
+	const beginDevice = useCallback(() => {
+		if (!canStartDeviceOperation(deviceOwner.current)) return null
+		const owner = Symbol('Ledger operation')
+		deviceOwner.current = owner
+		setIsDeviceBusy(true)
+		mutations.current++
+		invalidateOverview()
+		return owner
+	}, [invalidateOverview])
+	const endDevice = useCallback(
+		(owner: symbol) => {
+			if (!ownsDeviceOperation(deviceOwner.current, owner)) return
+			deviceOwner.current = null
+			setIsDeviceBusy(false)
+			mutations.current--
+			invalidateOverview()
 		},
-		isBusy: () => !canStartDeviceOperation(deviceOwner.current),
-	}
+		[invalidateOverview],
+	)
+	const deviceBusy = useCallback(() => !canStartDeviceOperation(deviceOwner.current), [])
+	const device = useMemo(
+		() => ({ begin: beginDevice, end: endDevice, isBusy: deviceBusy }),
+		[beginDevice, endDevice, deviceBusy],
+	)
+	const changeModal = useCallback(
+		(modal: ActiveModal) => {
+			if (!deviceBusy()) setActiveModal(modal)
+		},
+		[deviceBusy],
+	)
+
+	const mutate = useCallback(
+		async <T>(action: () => Promise<T>): Promise<T> => {
+			mutations.current++
+			invalidateOverview()
+			try {
+				return await action()
+			} finally {
+				mutations.current--
+				invalidateOverview()
+			}
+		},
+		[invalidateOverview],
+	)
+
+	const refresh = useCallback(async () => {
+		if (!overviewActive.current || mutations.current > 0) return
+		const generation = overviewGeneration.next()
+		overviewPending.current = generation
+		const res = await payoutOverview()
+		if (!overviewGeneration.isCurrent(generation)) return
+		overviewPending.current = null
+		if (!res.ok) {
+			setNodeWarning(res.error)
+			return
+		}
+		setPendingTxs(res.data.pending)
+		setPastTxs(res.data.past)
+		setNodeWarning(res.data.nodeWarning)
+	}, [overviewGeneration])
+
+	useEffect(() => {
+		if (!isSignedIn) return
+		overviewActive.current = true
+		void refresh()
+		const id = setInterval(() => {
+			if (overviewPending.current === null) void refresh()
+		}, POLL_MS)
+		return () => {
+			clearInterval(id)
+			overviewActive.current = false
+			invalidateOverview()
+		}
+	}, [isSignedIn, refresh, invalidateOverview])
+
 	const handleSignIn = async () => {
 		const owner = device.begin()
 		if (owner === null) return
@@ -271,33 +206,133 @@ export function useBlockPayouts() {
 
 	const handleSignOut = async () => {
 		if (device.isBusy()) return
+		overviewActive.current = false
+		invalidateOverview()
 		await payoutSignOut()
 		setSignIn({ phase: 'idle' })
+		setPendingTxs([])
+		setPastTxs([])
+	}
+
+	const handleSign = async (txId: string) => {
+		const owner = device.begin()
+		if (owner === null) return
+		setBusyTxId(txId)
+		try {
+			const res = await mutate(() => payoutSign(txId))
+			setBusyTxId(null)
+			setActiveModal(null)
+			if (!res.ok) {
+				showToast({ kind: 'error', message: res.error })
+			} else {
+				showToast(broadcastMessage(res.data.broadcast, 'Signed. Waiting for more signatures.'))
+			}
+		} finally {
+			device.end(owner)
+			setBusyTxId(null)
+		}
+		await refresh()
+	}
+
+	const handlePasteSignatures = async (txId: string, raw: string): Promise<PasteOutcome> => {
+		const res = await mutate(() => payoutPasteSignatures(txId, raw))
+		if (!res.ok) return { ok: false, message: res.error }
+		await refresh()
+		if (res.data.added > 0 || res.data.alreadyPresent > 0) {
+			showToast(
+				broadcastMessage(res.data.broadcast, `${res.data.added} signature${res.data.added === 1 ? '' : 's'} added.`),
+			)
+		}
+		return res.data.message ? { ok: false, message: res.data.message } : { ok: true }
+	}
+
+	const handleImport = async (raw: string): Promise<PasteOutcome> => {
+		const res = await mutate(() => payoutImport(raw))
+		if (!res.ok) return { ok: false, message: res.error }
+		await refresh()
+		showToast(broadcastMessage(res.data.broadcast, 'Transaction imported.'))
+		return { ok: true }
+	}
+
+	const handleExport = (txId: string) => {
+		const tx = pendingTxs.find((t) => t.txid === txId)
+		if (tx) downloadText(tx.psbt, `block-payout-${txId.slice(0, 8)}.psbt.txt`)
+	}
+
+	const handleCopySignatures = async (txId: string) => {
+		const res = await payoutSignaturesText(txId)
+		if (!res.ok) {
+			showToast({ kind: 'error', message: res.error })
+			return
+		}
+		await writeClipboard(res.data)
+		showToast({ kind: 'ok', message: 'Signatures copied to clipboard.' })
+	}
+
+	const handleRetryBroadcast = async (txId: string) => {
+		if (device.isBusy()) return
+		setBusyTxId(txId)
+		const res = await mutate(() => payoutRetryBroadcast(txId))
+		setBusyTxId(null)
+		showToast(res.ok ? broadcastMessage(res.data, '') : { kind: 'error', message: res.error })
+		await refresh()
+	}
+
+	const handleRebroadcast = async (txId: string) => {
+		if (device.isBusy()) return
+		setBusyTxId(txId)
+		const res = await mutate(() => payoutRebroadcast(txId))
+		setBusyTxId(null)
+		showToast(res.ok ? { kind: 'ok', message: 'Transaction rebroadcast.' } : { kind: 'error', message: res.error })
+	}
+
+	const handleCopyRawTx = (txId: string) => {
+		const tx = pastTxs.find((t) => t.txid === txId)
+		if (!tx) return
+		void writeClipboard(tx.rawTx)
+		showToast({ kind: 'ok', message: 'Signed transaction copied to clipboard.' })
+	}
+
+	const handleCreated = (message: string) => {
+		setActiveModal(null)
+		setActiveTab('pending')
+		showToast({ kind: message.startsWith('Broadcast failed') ? 'error' : 'ok', message })
+		void refresh()
 	}
 
 	return {
-		signIn,
 		device,
-		handleSignIn,
-		handleConfirmSignIn,
-		handleSignOut,
+		isDeviceBusy,
+		signIn,
 		activeTab,
 		pendingTxs,
 		pastTxs,
 		hasConflicts,
+		nodeWarning,
 		activeModal,
 		toast,
+		busyTxId,
 		setActiveTab,
-		openSignModal,
-		openPasteModal,
-		openCreateModal,
-		closeModal,
+		handleSignIn,
+		handleConfirmSignIn,
+		handleSignOut,
+		refresh,
+		openSignModal: (txId: string) => changeModal({ kind: 'sign', txId }),
+		openPasteModal: (txId: string) => changeModal({ kind: 'paste', txId }),
+		openImportModal: () => changeModal({ kind: 'import' }),
+		openAdminWalletModal: () => changeModal({ kind: 'admin-wallet' }),
+		openCreateModal: () => changeModal({ kind: 'create' }),
+		closeModal: () => changeModal(null),
 		handleSign,
 		handlePasteSignatures,
+		handleImport,
 		handleExport,
 		handleCopySignatures,
+		handleRetryBroadcast,
 		handleRebroadcast,
 		handleCopyRawTx,
-		handleCreateTx,
+		handleCreated,
 	}
 }
+
+export type BlockPayoutsHook = ReturnType<typeof useBlockPayouts>

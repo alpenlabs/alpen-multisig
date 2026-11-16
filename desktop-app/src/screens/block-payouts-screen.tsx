@@ -48,7 +48,7 @@ export function BlockPayoutsScreen() {
 			}
 		>
 			{hook.signIn.phase === 'signed-in' ? (
-				<BlockPayoutsDashboard {...hook} onTabChange={hook.setActiveTab} />
+				<BlockPayoutsDashboard hook={hook} />
 			) : (
 				<PayoutSignInPanel
 					signIn={hook.signIn}
