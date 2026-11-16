@@ -1,5 +1,7 @@
 # Spec: Block Payouts UI Mock — Payout Administrator
 
+> **Note (2026-11-11):** implemented for real; the mock data is gone. See [`block-payouts.md`](./block-payouts.md).
+
 > **Note (2026-08-31):** This mock is **obsolete as a contract** for false claim report ingestion. Step 1 uses a fabricated
 > JSON/`proof` format that does **not** match Alpen's supplementary spec. The real contract is
 > [`07-supplementary-false-claim-reports.md`](../0-prd/07-supplementary-false-claim-reports.md)

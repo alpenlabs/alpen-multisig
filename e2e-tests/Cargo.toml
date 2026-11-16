@@ -37,8 +37,6 @@ strata-tasks = { git = "https://github.com/alpenlabs/strata-common", tag = "v0.4
 desktop-app = { path = "../desktop-app/src-tauri" }
 payout-admin-core = { workspace = true, features = ["test-support"] }
 bip39 = "2.2"
-axum = "0.7"
-serde = { workspace = true }
 strata-bridge-connectors = { workspace = true }
 musig2 = { git = "https://github.com/alpenlabs/musig2", branch = "fix/deserialization-mismatch" }
 secp = { version = "0.3", default-features = false, features = ["secp256k1"] }

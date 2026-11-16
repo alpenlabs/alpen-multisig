@@ -1,0 +1,27 @@
+# Payout Administrator signer roster for the desktop app (Node settings → "Signer roster").
+#
+# params.toml (strata-bridge) stays the root of trust: it lists the admin keys and the threshold.
+# This file only adds what params.toml cannot hold, each admin's Ledger account xpub, so the app
+# can register the multisig wallet policy on the device. The app rejects the roster unless, for
+# every entry, `xpub/0/0` is exactly the key at the same position in `[keys.admin].pubkeys`.
+#
+# One [[admins]] entry per key in params.toml, in the same order.
+#   fingerprint: the Ledger's master key fingerprint (8 hex characters)
+#   xpub:        the account xpub at m/86'/1'/73' (test networks) or m/86'/0'/73' (mainnet)
+
+network = "signet"
+
+[[admins]]
+label = "Admin A"
+fingerprint = "f5acc2fd"
+xpub = "tpubD6NzVbkrYhZ4X…"
+
+[[admins]]
+label = "Admin B"
+fingerprint = "0a1b2c3d"
+xpub = "tpubD6NzVbkrYhZ4Y…"
+
+[[admins]]
+label = "Admin C"
+fingerprint = "9e8d7c6b"
+xpub = "tpubD6NzVbkrYhZ4Z…"

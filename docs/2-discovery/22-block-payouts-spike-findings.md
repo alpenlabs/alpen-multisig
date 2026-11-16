@@ -1,5 +1,12 @@
 # Block Payouts — Spike Findings
 
+> **Update (2026-11-11):** superseded for the current bridge. strata-bridge `main` at `dc926c42` (after PR #948,
+> "Tweaked N/N Internal Key") changed the claim's admin payout connector to a single `multi_a(threshold, admins…)`
+> leaf over a BIP-328 synthetic xpub of the N/N key. That output **is** a registrable Ledger wallet policy
+> (`tr(@0/**,multi_a(k,@1/**,…))`), so the Ledger Bitcoin app signs Admin Block Payouts. Trezor is still unsupported
+> (no tapscript signing on stock firmware). See [`docs/specs/block-payouts.md`](../specs/block-payouts.md).
+
+
 > **Status:** S1a recorded (2026-10-07). Later steps append a section here.
 > Discovery material — not SSOT, not committed scope.
 > Plan: [`21-block-payouts-spike-plan.md`](./21-block-payouts-spike-plan.md).
