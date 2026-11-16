@@ -1,8 +1,8 @@
 use super::{
     address_floors, address_on_device, blocking, branch_index_of, child_key, payout_tx,
-    pending_spends, policy, unix_now, used_scripts, AdminSigner, CoordinatorPending, Deployment,
-    FromStr, OutPoint, PayoutContext, PayoutNode, Psbt, ScriptBuf, Secp256k1, Serialize,
-    SCAN_RANGE,
+    pending_spends, policy, settle_sends, unix_now, used_scripts, wallet_rate, AdminSigner,
+    CoordinatorPending, Deployment, FromStr, HashSet, OutPoint, PayoutContext, PayoutNode, Psbt,
+    ScriptBuf, Secp256k1, Serialize, SCAN_RANGE,
 };
 
 /// An Admin Wallet coin, with where it sits in the account.
@@ -127,16 +127,37 @@ pub async fn admin_wallet(
     ctx: &PayoutContext,
     node: &dyn PayoutNode,
 ) -> Result<AdminWalletDto, String> {
+    let _guard = ctx.sends.lock().await;
+    let own = settle_sends(ctx, node).await?;
     let tip_height = node.tip().await?;
-    let coins = admin_wallet_coins(&ctx.dep, &ctx.me, node).await?;
+    let mut coins = admin_wallet_coins(&ctx.dep, &ctx.me, node).await?;
     let floors = address_floors(ctx, &coins);
+    let spent: HashSet<_> = own
+        .iter()
+        .flat_map(|(s, _)| s.transaction.input.iter().map(|i| i.previous_output))
+        .collect();
+    coins.retain(|c| !spent.contains(&c.outpoint));
     *ctx.coins.lock().await = Some((std::time::Instant::now(), ctx.me.index, coins.clone()));
     let pending = ctx.coordinator.pending().await.map_err(|e| e.to_string())?;
     let past = ctx.coordinator.past().await.map_err(|e| e.to_string())?;
     share_pending_coins(ctx, &pending);
     let (_, reserved, _) = pending_spends(&ctx.dep, &pending);
     let in_flight = ctx.reservations.in_flight();
-    let used = used_scripts(&coins, &pending, &past);
+    let mut used = used_scripts(&coins, &pending, &past);
+    for (send, _) in &own {
+        used.extend(
+            send.transaction
+                .output
+                .iter()
+                .map(|o| o.script_pubkey.clone()),
+        );
+        used.extend(
+            send.psbt
+                .inputs
+                .iter()
+                .filter_map(|i| i.witness_utxo.as_ref().map(|o| o.script_pubkey.clone())),
+        );
+    }
     // First receive address that never held a coin and is not used by a payout (spec D4).
     let receive_index = (floors[0]..=SCAN_RANGE)
         .find(|&i| change_or_receive_script(&ctx.me, 0, i).is_ok_and(|s| !used.contains(&s)))
@@ -170,9 +191,58 @@ pub async fn admin_wallet(
             .or_insert((c.script_pubkey.clone(), 0))
             .1 += c.value_sat;
     }
-    let change_total = 0;
-    let unconfirmed_sat = 0;
-    let sends = Vec::new();
+    let mut ownership = std::collections::HashMap::new();
+    if !own.is_empty() {
+        for branch in 0..=1 {
+            for index in 0..=SCAN_RANGE {
+                ownership.insert(
+                    change_or_receive_script(&ctx.me, branch, index)?,
+                    (branch, index),
+                );
+            }
+        }
+    }
+    let mut change_total = 0;
+    let mut unconfirmed_sat = 0;
+    let mut sends = Vec::new();
+    for (send, mempool) in own {
+        let tx = &send.transaction;
+        let amount_sat = tx
+            .output
+            .first()
+            .ok_or("Missing recipient output")?
+            .value
+            .to_sat();
+        let inputs: u64 = send
+            .psbt
+            .inputs
+            .iter()
+            .filter_map(|i| i.witness_utxo.as_ref())
+            .map(|o| o.value.to_sat())
+            .sum();
+        let mut own_total = 0;
+        for output in &tx.output {
+            if let Some(&(branch, index)) = ownership.get(&output.script_pubkey) {
+                balances
+                    .entry((branch, index))
+                    .or_insert((output.script_pubkey.clone(), 0))
+                    .1 += output.value.to_sat();
+                own_total += output.value.to_sat();
+            }
+        }
+        change_total += own_total;
+        unconfirmed_sat += own_total as i64 - inputs as i64;
+        sends.push(WalletSendDto {
+            txid: tx.compute_txid().to_string(),
+            to_address: send.recipient,
+            amount_sat,
+            fee_sat: send.fee_sat,
+            fee_rate: wallet_rate(send.fee_sat, tx.vsize() as u64),
+            sent_at: send.sent_at,
+            status: if mempool { "mempool" } else { "missing" }.into(),
+        });
+    }
+    sends.sort_by_key(|s| std::cmp::Reverse(s.sent_at));
     let addresses = balances
         .into_iter()
         .map(|(_, (script, balance_sat))| WalletAddressDto {

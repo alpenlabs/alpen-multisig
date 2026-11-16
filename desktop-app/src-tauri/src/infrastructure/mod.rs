@@ -39,6 +39,7 @@ mod mock_guard_tests {
 pub mod action_codec;
 pub mod admin_id_certificate;
 pub mod admin_wallet;
+pub mod admin_wallet_reservations;
 pub mod asm_enactment;
 pub mod asm_role_membership;
 pub mod asm_status_rpc;
@@ -56,19 +57,13 @@ pub mod node_broadcaster;
 pub mod node_config_store;
 pub mod node_fee_estimator;
 pub mod orchestrator_client;
+pub mod payout_coordinator;
+pub mod payout_node;
+pub mod payout_policy_store;
+pub mod payout_used_addresses;
 pub mod pending_reveals_store;
 pub mod rpc_timeout;
 pub mod signing;
 pub mod tx_lookups;
-
-pub mod payout_coordinator;
-
-pub mod payout_node;
-
-pub mod payout_policy_store;
-
-pub mod admin_wallet_reservations;
-
-pub mod payout_used_addresses;
 
 pub mod payout_wallet_store;

@@ -1,7 +1,7 @@
 use super::{
     account_path, address_floors, admin_wallet_coins, change_or_receive_script,
     check_app_unchanged, check_claims_on_node, fees, ledger_review, payout_tx, planner,
-    share_pending_coins, sign_and_submit, wallet_tx, AdminSigner, Amount, ChangeOutput,
+    share_pending_coins, sign_and_submit, wallet_key, wallet_tx, AdminSigner, Amount, ChangeOutput,
     ChildNumber, CoordinatorPast, CoordinatorPending, Deployment, DerivationPath, Deserialize,
     FeeInput, FromStr, HashMap, HashSet, LedgerReviewDto, OutPoint, PayoutContext, PayoutNode,
     PlanClaim, PlanCoin, PolicyStore, Psbt, ScriptBuf, Secp256k1, Serialize, SubmitResultDto,
@@ -272,12 +272,25 @@ pub(super) async fn plan_inputs(
         }
     };
     address_floors(ctx, &coins);
-    let used = used_scripts(&coins, &pending, &past);
+    let mut used = used_scripts(&coins, &pending, &past);
+    let own = ctx.sends.get(&wallet_key(ctx))?;
+    for send in &own {
+        used.extend(
+            send.transaction
+                .output
+                .iter()
+                .map(|o| o.script_pubkey.clone()),
+        );
+    }
     share_pending_coins(ctx, &pending);
     let (_, mut reserved, _) = pending_spends(&ctx.dep, &pending);
     // A coin the Admin Wallet panel is spending is unspent on the node until that transaction
     // arrives there.
     reserved.extend(ctx.reservations.in_flight());
+    reserved.extend(
+        own.iter()
+            .flat_map(|s| s.transaction.input.iter().map(|i| i.previous_output)),
+    );
     Ok((usable_coins(&coins, &reserved), used))
 }
 

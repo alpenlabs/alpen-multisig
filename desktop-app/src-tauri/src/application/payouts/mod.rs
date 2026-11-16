@@ -37,6 +37,7 @@ use crate::infrastructure::payout_coordinator::{
 use crate::infrastructure::payout_node::{branch_index_of, PayoutNode, SCAN_RANGE};
 use crate::infrastructure::payout_policy_store::PolicyStore;
 use crate::infrastructure::payout_used_addresses::{Floors, UsedAddresses};
+use crate::infrastructure::payout_wallet_store::{WalletSend, WalletSendStore};
 use crate::infrastructure::signing::SignatureResult;
 use payout_admin_core::wallet_send as wallet_tx;
 
@@ -57,6 +58,7 @@ pub struct PayoutState {
     device: Arc<dyn PayoutDevice>,
     coins: CoinCache,
     reservations: AdminWalletReservations,
+    sends: WalletSendStore,
     used_addresses: UsedAddresses,
 }
 
@@ -88,6 +90,7 @@ pub struct PayoutContext {
     pub coins: CoinCache,
     /// Coin reservations shared with the Admin Wallet panel.
     pub reservations: AdminWalletReservations,
+    pub sends: WalletSendStore,
     /// Addresses that held a coin once: not handed out again after the coin is spent.
     pub used_addresses: UsedAddresses,
 }
@@ -116,7 +119,7 @@ mod ledger;
 pub use ledger::*;
 
 mod wallet_send;
-use wallet_send::*;
+pub use wallet_send::*;
 
 #[cfg(test)]
 mod test_support;

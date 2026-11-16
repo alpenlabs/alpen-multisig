@@ -262,3 +262,29 @@ pub async fn payout_wallet_tip(cfg: tauri::State<'_, NodeConfigState>) -> Result
     use desktop_app::infrastructure::payout_node::PayoutNode;
     node(&cfg)?.tip().await
 }
+#[tauri::command]
+pub async fn payout_wallet_fee_rate(
+    cfg: tauri::State<'_, NodeConfigState>,
+) -> Result<Option<String>, String> {
+    use desktop_app::infrastructure::payout_node::PayoutNode;
+    node(&cfg)?.fee_rate().await
+}
+
+#[tauri::command]
+pub async fn payout_wallet_prepare(
+    input: payouts::WalletIntent,
+    cfg: tauri::State<'_, NodeConfigState>,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<payouts::WalletSendReview, String> {
+    payouts::wallet_prepare(&state.ctx().await?, &input, &node(&cfg)?).await
+}
+
+#[tauri::command]
+pub async fn payout_wallet_execute(
+    input: payouts::WalletIntent,
+    expected_txid: String,
+    cfg: tauri::State<'_, NodeConfigState>,
+    state: tauri::State<'_, PayoutState>,
+) -> Result<payouts::WalletSent, String> {
+    payouts::wallet_execute(&state.ctx().await?, &input, &expected_txid, &node(&cfg)?).await
+}

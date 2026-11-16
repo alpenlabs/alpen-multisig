@@ -10,6 +10,7 @@ pub mod fee_estimation;
 pub mod orchestrator_auth;
 pub mod orchestrator_client;
 pub mod orchestrator_url;
+pub mod payouts;
 pub mod pending_reveals;
 pub mod proposals;
 pub mod psbt_signer;
@@ -19,5 +20,3 @@ pub mod wallet_send;
 pub mod wallet_service;
 pub mod wallet_session;
 pub mod wallet_transactions;
-
-pub mod payouts;

@@ -11,8 +11,7 @@ pub(crate) mod hw_wallet;
 pub(crate) mod invoke;
 pub(crate) mod node_config;
 pub(crate) mod orchestrator_auth;
+pub(crate) mod payouts;
 pub(crate) mod proposals;
 pub(crate) mod signing;
 pub(crate) mod system;
-
-pub mod payouts;

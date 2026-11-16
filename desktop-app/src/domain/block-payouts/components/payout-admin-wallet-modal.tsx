@@ -3,6 +3,7 @@ import { PayoutButton } from './payout-button'
 import { truncate } from './modal-utils'
 import { ReviewRow as Row } from './review-controls'
 import { PayoutModal, PayoutHeading } from './payout-modal'
+import { PayoutWalletSendPanel } from './payout-wallet-send'
 import { ReceiveAddressRow } from '@/domain/admin-wallet/components/receive-address-row'
 import type { PayoutAdminWalletHook } from '../hooks/use-payout-admin-wallet'
 import { formatAmount } from '../model/block-payouts.mapping'
@@ -58,7 +59,7 @@ export function PayoutAdminWalletModal({ adminWallet, unit, onClose }: Props) {
 							)}
 							<div className="flex items-center gap-3">
 								<PayoutButton
-									disabled={isLoading || deviceCheck.status === 'busy'}
+									disabled={isLoading || adminWallet.send.busy || deviceCheck.status === 'busy'}
 									appearance="verify"
 									onClick={() => void adminWallet.handleShowOnLedger()}
 								>
@@ -84,6 +85,12 @@ export function PayoutAdminWalletModal({ adminWallet, unit, onClose }: Props) {
 								</div>
 							))}
 						</div>
+						<PayoutWalletSendPanel
+							send={adminWallet.send}
+							sends={wallet.sends}
+							unit={unit}
+							disabled={isLoading || adminWallet.send.busy || deviceCheck.status === 'busy'}
+						/>
 						<div className="flex flex-col gap-1.5">
 							<p className="m-0 text-body-sm font-medium text-[#0a0a0a]">Coins ({wallet.coins.length})</p>
 							{wallet.coins.length === 0 && (
@@ -108,7 +115,7 @@ export function PayoutAdminWalletModal({ adminWallet, unit, onClose }: Props) {
 
 				<div className="flex justify-end gap-2">
 					<PayoutButton
-						disabled={isLoading || deviceCheck.status === 'busy'}
+						disabled={isLoading || adminWallet.send.busy || deviceCheck.status === 'busy'}
 						appearance="refresh"
 						onClick={() => void adminWallet.handleRefresh()}
 					>

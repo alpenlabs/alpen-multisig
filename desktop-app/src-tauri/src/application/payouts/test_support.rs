@@ -157,6 +157,48 @@ impl PayoutDevice for TestDevice {
         Ok(1)
     }
 }
+pub(super) async fn send_fixture(
+    max: bool,
+) -> (PayoutContext, MockNode, WalletSendRequest, Arc<TestDevice>) {
+    let (fx, dep, me, _) = setup();
+    let mut ctx = signed_in(&dep, &me, coordinator_answering("[]".into()).await);
+    let device = Arc::new(TestDevice {
+        version: "2.5.1",
+        signing: true,
+        calls: Default::default(),
+    });
+    ctx.device = device.clone();
+    let coin = fee_coin(&fx, 0, 0, 100_000);
+    let mut node = MockNode::default();
+    node.outputs.insert(coin.outpoint, coin.txout.clone());
+    node.scanned
+        .push(crate::infrastructure::payout_node::ScannedCoin {
+            outpoint: coin.outpoint,
+            value_sat: 100_000,
+            script_pubkey: coin.txout.script_pubkey,
+            desc: "tr([00000000/86h/1h/73h/0/0]key)".into(),
+            height: 100,
+        });
+    let address =
+        bitcoin::Address::from_script(&change_or_receive_script(&me, 0, 1).unwrap(), dep.network)
+            .unwrap()
+            .to_string();
+    let mut req = WalletSendRequest {
+        address,
+        amount_sat: Some(20_000),
+        max,
+        fee_rate: "2".into(),
+        expected_txid: None,
+    };
+    req.expected_txid = Some(
+        wallet_prepare(&ctx, &WalletIntent::Send(req.clone()), &node)
+            .await
+            .unwrap()
+            .txid,
+    );
+    (ctx, node, req, device)
+}
+
 /// A coordinator that answers every request with `body` (JSON).
 pub(super) async fn coordinator_answering(body: String) -> PayoutCoordinator {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -190,6 +232,7 @@ pub(super) fn signed_in(
         device: Arc::new(TestDevice::app_only("2.5.1")),
         coins: Default::default(),
         reservations: Default::default(),
+        sends: WalletSendStore::default(),
         used_addresses: UsedAddresses::default(),
     }
 }

@@ -4,7 +4,8 @@ use super::{
     AdminDto, AdminSigner, AdminWalletReservations, Arc, CoinCache, Deployment, FromStr,
     LedgerPayoutDevice, LedgerReviewDto, LedgerStepDto, PayoutContext, PayoutCoordinator,
     PayoutState, PolicyStore, Serialize, SessionInner, SignatureResult, UsedAddresses,
-    XOnlyPublicKey, Xpub, MSG_NOT_A_PAYOUT_ADMIN, MSG_NOT_SIGNED_IN, PAYOUT_AUTHORITY,
+    WalletSendStore, XOnlyPublicKey, Xpub, MSG_NOT_A_PAYOUT_ADMIN, MSG_NOT_SIGNED_IN,
+    PAYOUT_AUTHORITY,
 };
 
 use crate::application::orchestrator_client::{
@@ -256,6 +257,7 @@ impl PayoutState {
             device,
             coins: CoinCache::default(),
             reservations: AdminWalletReservations::default(),
+            sends: WalletSendStore::default(),
             used_addresses: UsedAddresses::default(),
         }
     }
@@ -271,6 +273,7 @@ impl PayoutState {
             Arc::new(LedgerPayoutDevice),
             PolicyStore::new(data_dir.clone()),
         );
+        state.sends = WalletSendStore::new(data_dir.clone());
         state.used_addresses = UsedAddresses::new(data_dir);
         state
     }
@@ -326,6 +329,7 @@ impl PayoutState {
                 device: self.device.clone(),
                 coins: self.coins.clone(),
                 reservations: self.reservations.clone(),
+                sends: self.sends.clone(),
                 used_addresses: self.used_addresses.clone(),
             }),
             _ => Err(MSG_NOT_SIGNED_IN.into()),

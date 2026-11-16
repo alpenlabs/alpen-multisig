@@ -1,3 +1,4 @@
+import { usePayoutWalletSend } from './use-payout-wallet-send'
 import { shouldReloadWallet } from '../model/wallet-send'
 import { payoutWalletTip } from '@/api/payouts'
 import type { DeviceOperation } from '../model/device-operation'
@@ -116,7 +117,8 @@ export function usePayoutAdminWallet(device: DeviceOperation) {
 		}
 	}, [device, generation, handleRefresh])
 
-	return { wallet, error, stale, isLoading, deviceCheck, handleRefresh, handleShowOnLedger }
+	const send = usePayoutWalletSend(device, handleRefresh, isLoading)
+	return { send, wallet, error, stale, isLoading, deviceCheck, handleRefresh, handleShowOnLedger }
 }
 
 export type PayoutAdminWalletHook = ReturnType<typeof usePayoutAdminWallet>
