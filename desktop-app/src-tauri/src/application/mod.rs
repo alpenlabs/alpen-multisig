@@ -19,3 +19,5 @@ pub mod wallet_send;
 pub mod wallet_service;
 pub mod wallet_session;
 pub mod wallet_transactions;
+
+pub mod payout_admin;

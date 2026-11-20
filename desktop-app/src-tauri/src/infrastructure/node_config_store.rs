@@ -36,6 +36,10 @@ pub struct NodeConfig {
     /// `VITE_ORCHESTRATOR_BASE_URL`. Not used by any Rust-side resolution.
     #[serde(default)]
     pub custom_orchestrator_url: Option<String>,
+    #[serde(default)]
+    pub payout_params_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub payout_signers_path: Option<std::path::PathBuf>,
 }
 
 impl NodeConfig {
