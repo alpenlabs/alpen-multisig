@@ -146,8 +146,14 @@ impl async_client::Transport for HidTransport {
         };
         let answer = self.0.exchange(&zondax_cmd).map_err(HidError)?;
         let retcode = answer.retcode();
-        let status = StatusWord::try_from(retcode)
-            .map_err(|_| HidError(LedgerHIDError::Comm("unknown status word")))?;
+        // 0x5515: the device is locked (not a Bitcoin app status, so `StatusWord` lacks it).
+        let status = StatusWord::try_from(retcode).map_err(|_| {
+            HidError(LedgerHIDError::Comm(if retcode == 0x5515 {
+                "device locked"
+            } else {
+                "unknown status word"
+            }))
+        })?;
         Ok((status, answer.apdu_data().to_vec()))
     }
 }
@@ -432,6 +438,8 @@ fn map_ledger_error(op: &str, raw: &str) -> String {
         )
     } else if raw.contains("Deny") {
         "Request rejected on device — confirm the operation on your Ledger".to_string()
+    } else if raw.contains("device locked") {
+        format!("Ledger is locked — unlock it with your PIN, open the {BITCOIN_TEST_APP} or {BITCOIN_APP} app and try again")
     } else if raw.contains("BadState") {
         "Ledger is locked or busy — unlock your device and open the Bitcoin app".to_string()
     } else if raw.contains("UnexpectedResult") {
@@ -1206,6 +1214,12 @@ mod app_check_tests {
         let ins = map_ledger_error("get_version", "Device { status: InsNotSupported }");
         assert!(ins.starts_with("Bitcoin app not responding"), "{ins}");
         assert!(ins.contains("2.1.0 or later"), "{ins}");
+
+        let locked = map_ledger_error(
+            "get_version",
+            r#"Transport(HidError(Comm("device locked")))"#,
+        );
+        assert!(locked.starts_with("Ledger is locked"), "{locked}");
     }
 
     /// Answers GET_VERSION with a canned app name/version; panics on any other APDU so the
