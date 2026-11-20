@@ -21,10 +21,15 @@ export function useCreateBlockPayouts() {
 
 	useEffect(() => () => clearTimeout(timer.current), [])
 
-	const rebundle = async (excluded = removed, verified = reports, feeRate = rate) => {
+	// Starts a new request and makes every earlier one obsolete, a waiting preview included.
+	const begin = () => {
 		latest.current += 1
-		const request = latest.current
 		clearTimeout(timer.current)
+
+		return latest.current
+	}
+
+	const rebundle = async (excluded = removed, verified = reports, feeRate = rate, request = begin()) => {
 		setBundle(null)
 		setPreviewError(null)
 
@@ -37,13 +42,14 @@ export function useCreateBlockPayouts() {
 
 	// The fee preview follows the fee field by itself. It does not lock the screen, so typing is not interrupted.
 	const preview = async (feeRate: number | null) => {
+		const request = begin()
 		setPreviewing(true)
 		try {
-			await rebundle(removed, reports, feeRate)
+			await rebundle(removed, reports, feeRate, request)
 		} catch (error) {
-			setPreviewError(error instanceof Error ? error.message : String(error))
+			if (request === latest.current) setPreviewError(error instanceof Error ? error.message : String(error))
 		} finally {
-			setPreviewing(false)
+			if (request === latest.current) setPreviewing(false)
 		}
 	}
 
@@ -58,8 +64,8 @@ export function useCreateBlockPayouts() {
 		confirmedCount: confirmed.length,
 
 		setText: (value: string) => {
-			latest.current += 1
-			clearTimeout(timer.current)
+			begin()
+			setPreviewing(false)
 			setText(value)
 			setReports(null)
 			setBundle(null)
@@ -69,8 +75,8 @@ export function useCreateBlockPayouts() {
 		},
 
 		setFee: (value: string) => {
-			latest.current += 1
-			clearTimeout(timer.current)
+			begin()
+			setPreviewing(false)
 			setFee(value)
 			setBundle(null)
 			setPreviewError(null)
@@ -82,6 +88,8 @@ export function useCreateBlockPayouts() {
 		retryPreview: () => preview(rate),
 
 		verify: async () => {
+			begin()
+			setPreviewing(false)
 			setReports(null)
 			setBundle(null)
 			setRemoved([])

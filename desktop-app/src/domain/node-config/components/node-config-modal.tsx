@@ -9,6 +9,8 @@ type Props = {
 	localNodeStatus: LocalNodeStatus | null
 	isSaving: boolean
 	onSave: (draft: NodeConfig) => void | Promise<void>
+	/** Why the last Save failed; shown above the Save button. */
+	saveError?: string | null
 	onClose: () => void
 	onRecheck: (config: NodeConfig) => void
 }
@@ -53,12 +55,22 @@ function StatusLine({ label, reachable, url }: { label: string; reachable: boole
 	)
 }
 
-export function NodeConfigModal({ isOpen, config, localNodeStatus, isSaving, onSave, onClose, onRecheck }: Props) {
+export function NodeConfigModal({
+	isOpen,
+	config,
+	localNodeStatus,
+	isSaving,
+	onSave,
+	saveError,
+	onClose,
+	onRecheck,
+}: Props) {
 	const [draft, setDraft] = useState<NodeConfig>({ mode: 'local' })
 
+	// Every opening starts from the saved settings, so a canceled edit is gone.
 	useEffect(() => {
-		if (config) setDraft(config)
-	}, [config])
+		if (config && isOpen) setDraft(config)
+	}, [config, isOpen])
 
 	if (!isOpen) return null
 
@@ -282,6 +294,11 @@ export function NodeConfigModal({ isOpen, config, localNodeStatus, isSaving, onS
 					</div>
 
 					<div className="border-t border-[#f3f4f6] px-6 py-4">
+						{saveError && (
+							<p role="alert" className="m-0 mb-2 text-body-sm text-danger-deep">
+								The settings were not saved: {saveError}
+							</p>
+						)}
 						<button
 							type="submit"
 							disabled={isSaving}

@@ -128,8 +128,8 @@ export function CreateBlockPayouts({ hook }: { hook: PayoutAdminHook }) {
 					{0 < confirmedCount && (
 						<Alert kind="success">
 							{confirmedCount === 1
-								? '1 block payouts transaction is now pending. The other admins can sign it.'
-								: `${confirmedCount} block payouts transactions are now pending. The other admins can sign them.`}
+								? '1 block payouts transaction was created with your signature.'
+								: `${confirmedCount} block payouts transactions were created with your signature.`}
 						</Alert>
 					)}
 					{form.bundle && transactions.length === 0 && confirmedCount === 0 && (

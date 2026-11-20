@@ -8,7 +8,8 @@ import { useSessionAdminId } from '@/domain/admin-wallet/hooks/use-session-admin
 import { useEnsureAdminWalletSession } from '@/domain/admin-wallet/hooks/use-ensure-admin-wallet-session'
 import { PayoutSignInPanel } from '@/domain/payout-admin/components/payout-sign-in-panel'
 import { SignBlockPayoutsModal } from '@/domain/payout-admin/components/sign-block-payouts-modal'
-import { Working } from '@/domain/payout-admin/components/payout-ui'
+import { Alert, Working } from '@/domain/payout-admin/components/payout-ui'
+import { Button } from '@/components/button'
 import { useNavigate } from 'react-router-dom'
 import { DisconnectButton } from '@/components/disconnect-button'
 import { usePayoutAdmin } from '@/domain/payout-admin/hooks/use-payout-admin'
@@ -31,23 +32,25 @@ export function PayoutAdminScreen() {
 	const navigate = useNavigate()
 	const { disconnectSession, wallet, adapter, sessionTimeLabel, sessionWarning } = useSession()
 	// This route skips the role sign-in that starts the Admin Wallet elsewhere; block payouts pay fees from it.
-	useEnsureAdminWalletSession(adapter)
+	const adminWallet = useEnsureAdminWalletSession(adapter)
 	const panel = useWalletPanelData()
 	const adminId = useSessionAdminId(wallet)
 	const node = useNodeConfig()
 	const [settings, setSettings] = useState(false)
-	const { loadDeployment } = hook
+	const [saveError, setSaveError] = useState<string | null>(null)
+	const { loadDeployment, busy } = hook
 	const initialLoad = useRef(false)
 
 	// Saved payout admin files load by themselves when the screen opens; saving the settings loads them again.
 	useEffect(() => {
-		if (initialLoad.current || node.config === null) return
+		// While another action runs, the load would be skipped; wait for it to finish.
+		if (initialLoad.current || node.config === null || busy) return
 
 		initialLoad.current = true
 		const { payoutParamsPath, payoutSignersPath } = node.config
 
 		if (payoutParamsPath && payoutSignersPath) void loadDeployment(payoutParamsPath, payoutSignersPath)
-	}, [node.config, loadDeployment])
+	}, [node.config, busy, loadDeployment])
 
 	async function handleDisconnect() {
 		await disconnectSession()
@@ -55,18 +58,35 @@ export function PayoutAdminScreen() {
 	}
 
 	function openSettings() {
-		if (!hook.busy) setSettings(true)
+		if (hook.busy) return
+
+		setSaveError(null)
+		setSettings(true)
 	}
 
-	// Cancel changes nothing. Save signs the admin out only when a setting changed, then loads the files again.
-	async function saveSettings(draft: NodeConfig) {
-		const unchanged = sameSettings(node.config, draft)
-		await node.saveConfig(draft)
+	// Cancel changes nothing: the connection status goes back to the saved settings.
+	function closeSettings() {
 		setSettings(false)
 
-		if (unchanged) return
+		if (node.config) node.recheck(node.config)
+	}
 
-		hook.reset()
+	// Save signs the admin out only when a setting changed. It loads the files again then, or when none are loaded.
+	async function saveSettings(draft: NodeConfig) {
+		const unchanged = sameSettings(node.config, draft)
+		const failure = await node.saveConfig(draft)
+
+		if (failure !== null) {
+			setSaveError(failure)
+
+			return
+		}
+
+		setSettings(false)
+
+		if (unchanged && hook.deployment !== null) return
+
+		if (!unchanged) hook.reset()
 
 		if (draft.payoutParamsPath && draft.payoutSignersPath) {
 			await hook.loadDeployment(draft.payoutParamsPath, draft.payoutSignersPath)
@@ -103,6 +123,18 @@ export function PayoutAdminScreen() {
 			}
 		>
 			<fieldset disabled={hook.busy} className="contents">
+				{adminWallet.error && (
+					<div className="mx-auto w-full max-w-200">
+						<Alert kind="error">
+							<p className="m-0">
+								The Admin Wallet did not start: {adminWallet.error} Block payouts transactions pay their fee from it.
+							</p>
+							<Button size="sm" variant="secondary" className="mt-2" onClick={adminWallet.retry}>
+								Try again
+							</Button>
+						</Alert>
+					</div>
+				)}
 				{hook.session ? (
 					<PayoutAdminDashboard hook={hook} />
 				) : (
@@ -129,7 +161,8 @@ export function PayoutAdminScreen() {
 				isSaving={node.isSaving}
 				onRecheck={node.recheck}
 				onSave={saveSettings}
-				onClose={() => setSettings(false)}
+				saveError={saveError}
+				onClose={closeSettings}
 			/>
 		</ScreenShell>
 	)

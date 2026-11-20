@@ -277,11 +277,12 @@ export function usePayoutAdmin() {
 
 		finishCreate: (created: number) => {
 			setActiveModal(null)
-			setActiveTab('pending')
+			// A transaction that already has enough signatures is broadcast at once and is listed under Past.
+			setActiveTab(overview.pending.length === 0 ? 'past' : 'pending')
 			setToast(
 				created === 1
-					? 'The block payouts transaction is now pending. The other admins can sign it.'
-					: `${created} block payouts transactions are now pending. The other admins can sign them.`,
+					? 'The block payouts transaction was created with your signature.'
+					: `${created} block payouts transactions were created with your signature.`,
 			)
 		},
 
@@ -299,9 +300,9 @@ export function usePayoutAdmin() {
 			let imported = false
 			await run(async () => {
 				await unwrap(api.payoutImportPsbt(text))
-				await refresh()
 				imported = true
 				setToast('PSBT imported.')
+				await refresh()
 			}, 'Importing the PSBT…')
 
 			return imported
