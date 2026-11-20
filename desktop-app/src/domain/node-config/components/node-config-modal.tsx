@@ -260,6 +260,16 @@ export function NodeConfigModal({ isOpen, config, localNodeStatus, isSaving, onS
 							</div>
 						)}
 
+						{(['payoutParamsPath', 'payoutSignersPath'] as const).map((key) => (
+							<label className="block text-body-sm" key={key}>
+								{key === 'payoutParamsPath' ? 'Payout admin params.toml path' : 'Payout admin signer file path'}
+								<input
+									className="w-full rounded-lg border px-3 py-2"
+									value={draft[key] ?? ''}
+									onChange={(e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }))}
+								/>
+							</label>
+						))}
 						{localUnreachable && (
 							<div className="flex items-start gap-2 rounded-xl border border-accent-border bg-highlight-surface p-3 text-label text-emphasis">
 								<svg viewBox="0 0 24 24" fill="none" width={14} height={14} className="mt-0.5 shrink-0" aria-hidden>

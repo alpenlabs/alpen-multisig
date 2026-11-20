@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Paginator } from '@/components/paginator'
-import type { PastBlockPayoutTx } from '../model/block-payouts.types'
+import type { PastBlockPayoutsTx } from '../model/payout-admin.types'
 import { PastTransactionRow } from './past-transaction-row'
 
 type Props = {
-	txs: PastBlockPayoutTx[]
+	txs: PastBlockPayoutsTx[]
 	onRebroadcast: (txId: string) => void
 	onCopyRawTx: (txId: string) => void
 }

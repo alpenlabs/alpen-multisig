@@ -1,10 +1,10 @@
 import { writeClipboard } from '@/api/tauri-bridge'
 import { useState } from 'react'
-import type { PasteResult } from '../hooks/use-block-payouts'
+import type { PasteResult } from '../hooks/use-payout-admin'
 
 type Props = {
 	txId: string
-	onSubmit: (txId: string, raw: string) => PasteResult
+	onSubmit: (txId: string, raw: string) => Promise<PasteResult>
 	onClose: () => void
 }
 
@@ -12,8 +12,8 @@ export function PasteSignaturesModal({ txId, onSubmit, onClose }: Props) {
 	const [raw, setRaw] = useState('')
 	const [result, setResult] = useState<PasteResult | null>(null)
 
-	function handleSubmit() {
-		const res = onSubmit(txId, raw)
+	async function handleSubmit() {
+		const res = await onSubmit(txId, raw)
 		setResult(res)
 		if (res.ok) {
 			onClose()
@@ -47,8 +47,8 @@ export function PasteSignaturesModal({ txId, onSubmit, onClose }: Props) {
 					className="h-36 w-full resize-none rounded-xl border border-[#e5e7eb] bg-bg-base px-4 py-3 font-mono text-label text-[#0a0a0a] outline-none transition focus:border-[#0a0a0a] focus:bg-white"
 					placeholder="Paste signatures here, one per line…"
 					value={raw}
-					onChange={(e) => {
-						setRaw(e.target.value)
+					onChange={(event) => {
+						setRaw(event.target.value)
 						setResult(null)
 					}}
 					spellCheck={false}
@@ -101,8 +101,8 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
 	return (
 		<div
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-			onClick={(e) => {
-				if (e.target === e.currentTarget) onClose()
+			onClick={(event) => {
+				if (event.target === event.currentTarget) onClose()
 			}}
 		>
 			<div className="w-full max-w-120 rounded-2xl border border-[#e5e7eb] bg-white p-6 shadow-xl">{children}</div>

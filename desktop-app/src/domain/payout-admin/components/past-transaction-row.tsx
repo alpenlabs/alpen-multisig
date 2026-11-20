@@ -1,15 +1,10 @@
-import { useState } from 'react'
-import { Paginator } from '@/components/paginator'
-import type { PastBlockPayoutTx } from '../model/block-payouts.types'
-import { ConflictingInputIcon } from './conflicting-input-icon'
+import type { PastBlockPayoutsTx } from '../model/payout-admin.types'
 
 type Props = {
-	tx: PastBlockPayoutTx
+	tx: PastBlockPayoutsTx
 	onRebroadcast: () => void
 	onCopyRawTx: () => void
 }
-
-const INPUTS_PER_PAGE = 10
 
 function truncate(str: string, head = 10, tail = 8): string {
 	if (str.length <= head + tail + 3) return str
@@ -26,23 +21,17 @@ function formatDate(d: Date): string {
 	})
 }
 
-function formatSats(sats: number): string {
-	return sats.toLocaleString() + ' sats'
-}
-
 export function PastTransactionRow({ tx, onRebroadcast, onCopyRawTx }: Props) {
 	const isConfirmed = tx.status === 'confirmed'
-	const [expanded, setExpanded] = useState(false)
-	const [inputsPage, setInputsPage] = useState(1)
-	const totalInputPages = Math.ceil(tx.inputs.length / INPUTS_PER_PAGE)
-	const pagedInputs = tx.inputs.slice((inputsPage - 1) * INPUTS_PER_PAGE, inputsPage * INPUTS_PER_PAGE)
 
 	return (
 		<div className="rounded-xl border border-[#e5e7eb] bg-white">
 			<div className="flex items-center gap-4 px-5 py-3.5">
 				{/* TX ID */}
 				<div className="min-w-0 flex-1">
-					<span className="font-mono text-body-sm font-medium text-[#0a0a0a]">{truncate(tx.id, 12, 6)}</span>
+					<span title={tx.id} className="font-mono text-body-sm font-medium text-[#0a0a0a]">
+						{truncate(tx.id, 12, 6)}
+					</span>
 				</div>
 
 				{/* Status badge */}
@@ -64,7 +53,7 @@ export function PastTransactionRow({ tx, onRebroadcast, onCopyRawTx }: Props) {
 
 				{/* Timestamp */}
 				<span className="w-44 shrink-0 text-right text-label text-[#6b7280]">
-					{isConfirmed && tx.blockTimestamp ? formatDate(tx.blockTimestamp) : formatDate(tx.broadcastAt)}
+					{isConfirmed && tx.blockTimestamp ? formatDate(tx.blockTimestamp) : ''}
 				</span>
 
 				{/* Actions */}
@@ -106,58 +95,8 @@ export function PastTransactionRow({ tx, onRebroadcast, onCopyRawTx }: Props) {
 							</button>
 						</>
 					)}
-
-					{/* Toggle inputs */}
-					{tx.inputs.length > 0 && (
-						<button
-							type="button"
-							title={expanded ? 'Hide inputs' : 'Show inputs'}
-							aria-label={expanded ? 'Hide inputs' : 'Show inputs'}
-							className="flex h-7 w-7 items-center justify-center rounded-md border border-[#e5e7eb] bg-white text-[#6b7280] transition hover:border-[#d1d5db] hover:bg-[#f9fafb] hover:text-[#374151]"
-							onClick={() => setExpanded((v) => !v)}
-						>
-							<svg
-								width={12}
-								height={12}
-								viewBox="0 0 24 24"
-								fill="none"
-								aria-hidden
-								className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
-							>
-								<path
-									d="M6 9l6 6 6-6"
-									stroke="currentColor"
-									strokeWidth="1.5"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-								/>
-							</svg>
-						</button>
-					)}
 				</div>
 			</div>
-
-			{/* Inputs section */}
-			{expanded && tx.inputs.length > 0 && (
-				<div className="border-t border-[#f3f4f6] px-5 pb-4 pt-3">
-					<p className="m-0 mb-1.5 text-label font-semibold uppercase tracking-wider text-[#9ca3af]">Inputs</p>
-					<div className="flex flex-col gap-1">
-						{pagedInputs.map((input) => (
-							<div key={input.outpoint} className="flex items-center gap-1.5">
-								<span className="font-mono text-label text-[#374151]">{truncate(input.outpoint, 16, 6)}</span>
-								<span className="text-mono-sm text-[#9ca3af]">({formatSats(input.amount)})</span>
-								{input.isConflicting && <ConflictingInputIcon />}
-							</div>
-						))}
-					</div>
-					<Paginator
-						page={inputsPage}
-						totalPages={totalInputPages}
-						onPageChange={setInputsPage}
-						className="mt-3 flex items-center gap-1.5"
-					/>
-				</div>
-			)}
 		</div>
 	)
 }

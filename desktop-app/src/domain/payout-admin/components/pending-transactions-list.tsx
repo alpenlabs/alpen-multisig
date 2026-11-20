@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { Paginator } from '@/components/paginator'
-import type { PendingBlockPayoutTx } from '../model/block-payouts.types'
+import type { PendingBlockPayoutsTx } from '../model/payout-admin.types'
 import { PendingTransactionCard } from './pending-transaction-card'
 
 type Props = {
-	txs: PendingBlockPayoutTx[]
+	txs: PendingBlockPayoutsTx[]
 	hasConflicts: boolean
 	onSign: (txId: string) => void
 	onPasteSignatures: (txId: string) => void
 	onExport: (txId: string) => void
 	onCopySignatures: (txId: string) => void
+	onRetry: (txId: string) => void
 }
 
 const PAGE_SIZE = 10
@@ -21,6 +22,7 @@ export function PendingTransactionsList({
 	onPasteSignatures,
 	onExport,
 	onCopySignatures,
+	onRetry,
 }: Props) {
 	const [page, setPage] = useState(1)
 	const totalPages = Math.ceil(txs.length / PAGE_SIZE)
@@ -69,6 +71,7 @@ export function PendingTransactionsList({
 					key={tx.id}
 					tx={tx}
 					onSign={() => onSign(tx.id)}
+					onRetry={() => onRetry(tx.id)}
 					onPasteSignatures={() => onPasteSignatures(tx.id)}
 					onExport={() => onExport(tx.id)}
 					onCopySignatures={() => onCopySignatures(tx.id)}

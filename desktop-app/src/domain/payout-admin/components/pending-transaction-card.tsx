@@ -1,13 +1,14 @@
 import { writeClipboard } from '@/api/tauri-bridge'
-import type { PendingBlockPayoutTx } from '../model/block-payouts.types'
+import type { PendingBlockPayoutsTx } from '../model/payout-admin.types'
 import { ConflictingInputIcon } from './conflicting-input-icon'
 
 type Props = {
-	tx: PendingBlockPayoutTx
+	tx: PendingBlockPayoutsTx
 	onSign: () => void
 	onPasteSignatures: () => void
 	onExport: () => void
 	onCopySignatures: () => void
+	onRetry: () => void
 }
 
 function formatTimeRemaining(expiresAt: Date): { label: string; urgent: boolean } {
@@ -30,15 +31,10 @@ function truncate(str: string, head = 10, tail = 8): string {
 	return `${str.slice(0, head)}…${str.slice(-tail)}`
 }
 
-function formatSats(sats: number): string {
-	return sats.toLocaleString() + ' sats'
-}
-
-export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport, onCopySignatures }: Props) {
+export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport, onCopySignatures, onRetry }: Props) {
 	const { label: timeLabel, urgent } = formatTimeRemaining(tx.expiresAt)
-	const progress =
-		tx.signaturesRequired === 0 ? 0 : Math.min((tx.signaturesReceived / tx.signaturesRequired) * 100, 100)
-	const hasQuorum = tx.signaturesReceived >= tx.signaturesRequired
+	const progress = tx.signaturesRequired === 0 ? 0 : Math.min((tx.adminsSigned / tx.signaturesRequired) * 100, 100)
+	const hasQuorum = tx.adminsSigned >= tx.signaturesRequired
 
 	function handleCopyId() {
 		void writeClipboard(tx.id)
@@ -50,7 +46,9 @@ export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport
 			<div className="flex items-start justify-between gap-3">
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-2">
-						<span className="font-mono text-body-sm font-medium text-[#0a0a0a]">{truncate(tx.id, 12, 6)}</span>
+						<span title={tx.id} className="font-mono text-body-sm font-medium text-[#0a0a0a]">
+							{truncate(tx.id, 12, 6)}
+						</span>
 						<button
 							type="button"
 							className="rounded p-0.5 text-[#9ca3af] transition hover:text-[#6b7280]"
@@ -68,7 +66,7 @@ export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport
 						</button>
 					</div>
 					<p className="m-0 mt-0.5 text-label text-[#6b7280]">
-						{tx.inputs.length} input{tx.inputs.length !== 1 ? 's' : ''}
+						{tx.claimInputCount} input{tx.claimInputCount !== 1 ? 's' : ''}
 					</p>
 				</div>
 
@@ -82,7 +80,7 @@ export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport
 						<circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
 						<path d="M12 7v5l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
 					</svg>
-					{timeLabel}
+					{timeLabel} · {tx.expiresAt.toLocaleString()}
 				</span>
 			</div>
 
@@ -91,7 +89,7 @@ export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport
 				<div className="mb-1.5 flex items-center justify-between gap-2">
 					<span className="text-body-sm font-medium text-[#0a0a0a]">Signatures</span>
 					<span className="text-body-sm font-medium text-[#0a0a0a]">
-						{tx.signaturesReceived} / {tx.signaturesRequired}
+						{tx.adminsSigned} / {tx.signaturesRequired}
 					</span>
 				</div>
 				<div className="h-1.5 rounded-full bg-[#ebedf0]">
@@ -104,18 +102,24 @@ export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport
 
 			{/* Inputs list */}
 			<div className="mt-4">
-				<p className="m-0 mb-1.5 text-label font-semibold uppercase tracking-wider text-[#9ca3af]">Inputs</p>
+				<p className="m-0 mb-1.5 text-label font-semibold uppercase tracking-wider text-[#9ca3af]">Claim inputs</p>
 				<div className="flex flex-col gap-1">
 					{tx.inputs.map((input) => (
 						<div key={input.outpoint} className="flex items-center gap-1.5">
-							<span className="font-mono text-label text-[#374151]">{truncate(input.outpoint, 16, 6)}</span>
-							<span className="text-mono-sm text-[#9ca3af]">({formatSats(input.amount)})</span>
+							<span className="break-all font-mono text-label text-[#374151]">{input.outpoint}</span>
+							{input.isConflicting && <span className="text-mono-sm text-[#9ca3af]">Duplicate input</span>}
 							{input.isConflicting && <ConflictingInputIcon />}
 						</div>
 					))}
 				</div>
 			</div>
 
+			{tx.broadcastError && (
+				<div role="alert" className="mt-3 text-danger-deep">
+					{tx.broadcastError}
+					<button onClick={onRetry}>Retry broadcast</button>
+				</div>
+			)}
 			{/* Footer row */}
 			<div className="mt-4 flex items-center justify-between gap-3 border-t border-[#f3f4f6] pt-3">
 				{/* Signed status or Sign button */}
@@ -159,7 +163,7 @@ export function PendingTransactionCard({ tx, onSign, onPasteSignatures, onExport
 							/>
 						</svg>
 					</IconButton>
-					<IconButton label="Export raw transaction" onClick={onExport}>
+					<IconButton label="Export base64 PSBT" onClick={onExport}>
 						<svg width={14} height={14} viewBox="0 0 24 24" fill="none" aria-hidden>
 							<path
 								d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"

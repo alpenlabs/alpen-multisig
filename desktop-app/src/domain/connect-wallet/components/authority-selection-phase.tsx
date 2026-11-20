@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { AuthRole } from '@/types'
 import {
@@ -166,6 +167,9 @@ export function AuthoritySelectionPhase({
 				})}
 			</div>
 
+			<Link className="mt-3 block rounded-xl border bg-white px-5 py-4" to="/payout-admin">
+				Payout Administrator · Ledger · No ASM connection required
+			</Link>
 			<ScreenBottomBar
 				left={
 					<>

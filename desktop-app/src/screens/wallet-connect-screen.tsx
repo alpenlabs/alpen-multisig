@@ -127,7 +127,7 @@ export function WalletConnectScreen() {
 		try {
 			await connectOrchestratorSession()
 			setAuthOkMessage('Success: authenticated.')
-			navigate(selectedRole === AuthRole.PayoutAdministrator ? '/block-payouts' : '/proposals')
+			navigate(selectedRole === AuthRole.PayoutAdministrator ? '/payout-admin' : '/proposals')
 		} catch (e) {
 			const message = String(e)
 			if (message.toLowerCase().includes('not a member')) {
@@ -188,7 +188,7 @@ export function WalletConnectScreen() {
 			return
 		}
 		if (selectedAuthority.role === AuthRole.PayoutAdministrator) {
-			navigate('/block-payouts')
+			navigate('/payout-admin')
 			return
 		}
 		setAuthorityStep('authenticate-session')
