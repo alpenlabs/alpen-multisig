@@ -123,10 +123,14 @@ export function usePayoutAdmin() {
 	) => {
 		const value = await unwrap(request)
 		setReview(value)
+		// The review stays open while the Ledger shows its screens, so the admin can compare them.
 		setConfirm(() => async () => {
-			setReview(null)
-			setConfirm(null)
-			await action(value.reviewId)
+			try {
+				await action(value.reviewId)
+			} finally {
+				setReview(null)
+				setConfirm(null)
+			}
 		})
 	}
 
