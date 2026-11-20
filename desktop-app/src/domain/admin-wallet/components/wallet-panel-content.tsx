@@ -16,6 +16,7 @@ import { SyncChip } from './sync-chip'
 export type WalletPanelContentProps = {
 	disabledError: AdminWalletError | null
 	/** The session's Admin ID, shown at the top of the panel (PRD 06 §3.b.ii.2, §4.a). */
+	hideAdminId?: boolean
 	adminId: SessionAdminId
 	confirmedBalanceSats: number
 	unconfirmedBalanceSats: number
@@ -54,6 +55,7 @@ export type WalletPanelContentProps = {
 
 export function WalletPanelContent({
 	disabledError,
+	hideAdminId = false,
 	adminId,
 	confirmedBalanceSats,
 	unconfirmedBalanceSats,
@@ -119,18 +121,20 @@ export function WalletPanelContent({
 	return (
 		<div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5">
 			<div className="mb-4">
-				<AdminIdRow
-					adminId={adminId}
-					verify={
-						hwDeviceType && adminIdDerivationPath
-							? {
-									deviceType: hwDeviceType,
-									network: networkFromPath(adminIdDerivationPath),
-									derivationPath: adminIdDerivationPath,
-								}
-							: undefined
-					}
-				/>
+				{!hideAdminId && (
+					<AdminIdRow
+						adminId={adminId}
+						verify={
+							hwDeviceType && adminIdDerivationPath
+								? {
+										deviceType: hwDeviceType,
+										network: networkFromPath(adminIdDerivationPath),
+										derivationPath: adminIdDerivationPath,
+									}
+								: undefined
+						}
+					/>
+				)}
 			</div>
 
 			<WalletBalance

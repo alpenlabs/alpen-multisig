@@ -1,7 +1,9 @@
+import { Link } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { AuthRole } from '@/types'
 import {
 	AuthorityShieldIcon,
+	ShieldAccentIcon,
 	AuthorityLayersIcon,
 	AuthorityServerIcon,
 	AuthorityHaltIcon,
@@ -166,6 +168,21 @@ export function AuthoritySelectionPhase({
 				})}
 			</div>
 
+			<Link
+				className="mt-3 flex items-start gap-4 rounded-xl border border-[#e5e7eb] bg-white px-5 py-4 transition hover:border-[#d1d5db]"
+				to="/payout-admin"
+			>
+				<span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#f3f4f6]">
+					<ShieldAccentIcon width={22} height={22} />
+				</span>
+				<span>
+					<strong className="block text-[1rem] font-semibold text-[#111827]">Payout Administrator</strong>
+					<span className="mt-1 block text-body text-[#6b7280]">
+						Admin Block Payouts, signed with a Ledger. No ASM connection required.
+					</span>
+					<span className="mt-1.5 block text-label text-[#9ca3af]">Signer set · signers.toml</span>
+				</span>
+			</Link>
 			<ScreenBottomBar
 				left={
 					<>

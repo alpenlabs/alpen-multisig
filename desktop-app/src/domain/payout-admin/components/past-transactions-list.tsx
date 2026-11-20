@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Paginator } from '@/components/paginator'
-import type { PastBlockPayoutTx } from '../model/block-payouts.types'
-import { PastTransactionRow } from './past-transaction-row'
+import type { PastBlockPayoutsTx } from '../model/payout-admin.types'
+import { PAST_COLUMNS, PastTransactionRow } from './past-transaction-row'
 
 type Props = {
-	txs: PastBlockPayoutTx[]
+	txs: PastBlockPayoutsTx[]
 	onRebroadcast: (txId: string) => void
 	onCopyRawTx: (txId: string) => void
 }
@@ -32,21 +32,25 @@ export function PastTransactionsList({ txs, onRebroadcast, onCopyRawTx }: Props)
 	}
 
 	return (
-		<div className="flex flex-col gap-2.5">
-			<div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 pb-1">
-				<span className="text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">Transaction ID</span>
-				<span className="text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">Status</span>
-				<span className="text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">Timestamp</span>
-				<span />
+		<div className="flex flex-col gap-3">
+			<div className="rounded-xl border border-[#e5e7eb] bg-white">
+				<div
+					className={`${PAST_COLUMNS} px-5 py-2 text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af] border-b border-[#e5e7eb]`}
+				>
+					<span>Transaction ID</span>
+					<span>Status</span>
+					<span>Timestamp</span>
+					<span />
+				</div>
+				{paged.map((tx) => (
+					<PastTransactionRow
+						key={tx.id}
+						tx={tx}
+						onRebroadcast={() => onRebroadcast(tx.id)}
+						onCopyRawTx={() => onCopyRawTx(tx.id)}
+					/>
+				))}
 			</div>
-			{paged.map((tx) => (
-				<PastTransactionRow
-					key={tx.id}
-					tx={tx}
-					onRebroadcast={() => onRebroadcast(tx.id)}
-					onCopyRawTx={() => onCopyRawTx(tx.id)}
-				/>
-			))}
 			<Paginator page={page} totalPages={totalPages} onPageChange={setPage} />
 		</div>
 	)

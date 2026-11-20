@@ -7,6 +7,8 @@ import { WalletPanelHeader } from './wallet-panel-header'
 import { WalletPanelContent } from './wallet-panel-content'
 
 export type WalletSessionControlProps = {
+	hideAdminId?: boolean
+	hideSessionTime?: boolean
 	panel: WalletPanelData
 	sessionTimeLabel: string
 	sessionWarning: boolean
@@ -20,13 +22,20 @@ export type WalletSessionControlProps = {
  * header flow). Place inside `ScreenShell`'s `headerContent` alongside the
  * authority badge and disconnect button.
  */
-export function WalletSessionControl({ panel, sessionTimeLabel, sessionWarning, adminId }: WalletSessionControlProps) {
-	const signerLabel = adminIdDisplay(adminId.display, 'truncated')
+export function WalletSessionControl({
+	panel,
+	sessionTimeLabel,
+	sessionWarning,
+	adminId,
+	hideAdminId = false,
+	hideSessionTime = false,
+}: WalletSessionControlProps) {
+	const signerLabel = hideAdminId ? 'Admin Wallet' : adminIdDisplay(adminId.display, 'truncated')
 
 	return (
 		<>
 			<SessionChip
-				timeLabel={sessionTimeLabel}
+				timeLabel={hideSessionTime ? undefined : sessionTimeLabel}
 				signerLabel={signerLabel}
 				warning={sessionWarning}
 				onActivate={panel.toggle}
@@ -40,6 +49,7 @@ export function WalletSessionControl({ panel, sessionTimeLabel, sessionWarning, 
 					isWatchOnly={panel.isWatchOnly}
 				/>
 				<WalletPanelContent
+					hideAdminId={hideAdminId}
 					disabledError={panel.disabledError}
 					adminId={adminId}
 					confirmedBalanceSats={panel.confirmedBalanceSats}

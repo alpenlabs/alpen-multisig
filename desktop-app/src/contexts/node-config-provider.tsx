@@ -48,6 +48,8 @@ export function NodeConfigProvider({ children }: { children: ReactNode }) {
 			if (statusResult.ok) setLocalNodeStatus(statusResult.data)
 		}
 		setIsSaving(false)
+
+		return result.ok ? null : result.error
 	}, [])
 
 	const localNodeUnreachable =

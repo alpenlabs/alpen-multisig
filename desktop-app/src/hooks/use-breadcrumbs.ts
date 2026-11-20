@@ -13,7 +13,7 @@ const SEGMENT_LABELS: Record<string, string> = {
 	broadcast: 'Send',
 	cancel: 'Cancel',
 	manual: 'Manual',
-	'block-payouts': 'Block Payouts',
+	'payout-admin': 'Payout Admin',
 }
 
 function truncateId(id: string): string {

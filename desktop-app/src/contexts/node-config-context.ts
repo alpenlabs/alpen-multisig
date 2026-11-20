@@ -7,7 +7,8 @@ export type NodeConfigContextValue = {
 	isLoading: boolean
 	isSaving: boolean
 	localNodeUnreachable: boolean
-	saveConfig: (draft: NodeConfig) => Promise<void>
+	/** Resolves to the error message when the settings could not be saved, else to null. */
+	saveConfig: (draft: NodeConfig) => Promise<string | null>
 	recheck: (config: NodeConfig) => void
 }
 

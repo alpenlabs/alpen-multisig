@@ -37,7 +37,7 @@ export function CreateProposalScreen() {
 	// Payout proposals have their own transaction flow and no ASM role. A direct navigation to
 	// this generic ASM form must not inherit the Strata Administrator's action menu.
 	if (authority === 'payout_admin') {
-		return <Navigate to="/block-payouts" replace />
+		return <Navigate to="/payout-admin" replace />
 	}
 
 	async function handleDisconnect() {
