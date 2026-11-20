@@ -4,6 +4,7 @@ import { useNodeConfig } from '@/domain/node-config/hooks/use-node-config'
 import { useWalletPanelData } from '@/domain/admin-wallet/hooks/use-wallet-panel-data'
 import { WalletSessionControl } from '@/domain/admin-wallet/components/wallet-session-control'
 import { useSessionAdminId } from '@/domain/admin-wallet/hooks/use-session-admin-id'
+import { useEnsureAdminWalletSession } from '@/domain/admin-wallet/hooks/use-ensure-admin-wallet-session'
 import { PayoutSignInPanel } from '@/domain/payout-admin/components/payout-sign-in-panel'
 import { SignBlockPayoutsModal } from '@/domain/payout-admin/components/sign-block-payouts-modal'
 import { useNavigate } from 'react-router-dom'
@@ -17,7 +18,9 @@ import { useSession } from '@/hooks/use-session'
 export function PayoutAdminScreen() {
 	const hook = usePayoutAdmin()
 	const navigate = useNavigate()
-	const { disconnectSession, wallet, sessionTimeLabel, sessionWarning } = useSession()
+	const { disconnectSession, wallet, adapter, sessionTimeLabel, sessionWarning } = useSession()
+	// This route skips the role sign-in that starts the Admin Wallet elsewhere; block payouts pay fees from it.
+	useEnsureAdminWalletSession(adapter)
 	const panel = useWalletPanelData()
 	const adminId = useSessionAdminId(wallet)
 	const node = useNodeConfig()
