@@ -105,7 +105,11 @@ impl Coordinator {
             request
         };
 
-        let response = request.send().await.map_err(|error| error.to_string())?;
+        let response = request.send().await.map_err(|error| {
+            let origin = self.url.origin().ascii_serialization();
+
+            format!("Coordinator at {origin}: {}", error.without_url())
+        })?;
 
         if !response.status().is_success() {
             return Err(format!(
@@ -219,7 +223,7 @@ impl PayoutAdminState {
 
         run_blocking(move || {
             let electrum = bdk_electrum::electrum_client::Client::new(&url)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| format!("Electrum server at {url}: {error}"))?;
 
             operation(&electrum)
         })
@@ -417,7 +421,7 @@ impl SessionState {
                     && signer.account_xpub() == identity.signer.account_xpub()
             })
             .cloned()
-            .ok_or("Ledger identity is not in signer file")?;
+            .ok_or("Ledger identity is not in signers.toml")?;
 
         Ok((deployment, identity))
     }
