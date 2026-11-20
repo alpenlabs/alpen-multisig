@@ -24,6 +24,7 @@ pub mod block_payouts_tx;
 pub mod bundler;
 pub mod deployment;
 pub mod fees;
+pub mod policy;
 pub mod report;
 
 /// Deterministic fixtures for this crate's tests and for the coordinator's and desktop's tests
@@ -32,3 +33,5 @@ pub mod report;
 pub mod test_support;
 
 pub use deployment::{AdminSigner, Covenant, Deployment, DeploymentError, SignerRoster};
+
+pub mod wire;
