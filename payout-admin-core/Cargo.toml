@@ -1,0 +1,23 @@
+[package]
+name = "payout-admin-core"
+version = "0.4.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Payout Administrator logic: bridge params, false claim reports, Admin Block Payouts transactions"
+
+[dependencies]
+strata-bridge-common = { workspace = true }
+strata-bridge-connectors = { workspace = true }
+strata-bridge-primitives = { workspace = true }
+strata-bridge-key-deriv = { workspace = true }
+strata-bridge-tx-graph = { workspace = true }
+bitcoin = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+thiserror = "2"
+toml = "0.8"
+musig2 = { git = "https://github.com/alpenlabs/musig2", branch = "fix/deserialization-mismatch" }
+
+[features]
+test-support = []
