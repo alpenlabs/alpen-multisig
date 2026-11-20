@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Paginator } from '@/components/paginator'
 import type { PendingBlockPayoutsTx } from '../model/payout-admin.types'
-import { PendingTransactionCard } from './pending-transaction-card'
+import { PENDING_COLUMNS, PendingTransactionRow } from './pending-transaction-row'
+import { Alert } from './payout-ui'
 
 type Props = {
 	txs: PendingBlockPayoutsTx[]
@@ -25,6 +26,7 @@ export function PendingTransactionsList({
 	onRetry,
 }: Props) {
 	const [page, setPage] = useState(1)
+	const [open, setOpen] = useState<string | null>(null)
 	const totalPages = Math.ceil(txs.length / PAGE_SIZE)
 	const paged = txs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
@@ -48,35 +50,35 @@ export function PendingTransactionsList({
 	return (
 		<div className="flex flex-col gap-3">
 			{hasConflicts && (
-				<div className="flex items-start gap-2.5 rounded-xl border border-accent-border bg-highlight-surface px-4 py-3">
-					<svg
-						width={16}
-						height={16}
-						viewBox="0 0 24 24"
-						fill="none"
-						aria-hidden
-						className="mt-0.5 shrink-0 text-emphasis-soft"
-					>
-						<circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
-						<path d="M12 8v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-						<circle cx="12" cy="16" r="1" fill="currentColor" />
-					</svg>
-					<p className="m-0 text-body-sm text-emphasis">
-						Some pending transactions share inputs. See the <span className="font-medium">ⓘ icons</span> for details.
-					</p>
-				</div>
+				<Alert kind="warning">
+					Some pending transactions share a claim input (marked ⚠). Only one of them can confirm. Open Details to see
+					which input.
+				</Alert>
 			)}
-			{paged.map((tx) => (
-				<PendingTransactionCard
-					key={tx.id}
-					tx={tx}
-					onSign={() => onSign(tx.id)}
-					onRetry={() => onRetry(tx.id)}
-					onPasteSignatures={() => onPasteSignatures(tx.id)}
-					onExport={() => onExport(tx.id)}
-					onCopySignatures={() => onCopySignatures(tx.id)}
-				/>
-			))}
+			<div className="rounded-xl border border-[#e5e7eb] bg-white">
+				<div
+					className={`${PENDING_COLUMNS} border-b border-[#e5e7eb] px-5 py-2 text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]`}
+				>
+					<span>Time left</span>
+					<span>Transaction ID</span>
+					<span>Inputs</span>
+					<span>Signatures</span>
+					<span />
+				</div>
+				{paged.map((tx) => (
+					<PendingTransactionRow
+						key={tx.id}
+						tx={tx}
+						open={open === tx.id}
+						onToggle={() => setOpen(open === tx.id ? null : tx.id)}
+						onSign={() => onSign(tx.id)}
+						onRetry={() => onRetry(tx.id)}
+						onPasteSignatures={() => onPasteSignatures(tx.id)}
+						onExport={() => onExport(tx.id)}
+						onCopySignatures={() => onCopySignatures(tx.id)}
+					/>
+				))}
+			</div>
 			<Paginator page={page} totalPages={totalPages} onPageChange={setPage} />
 		</div>
 	)

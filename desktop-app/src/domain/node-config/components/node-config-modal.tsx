@@ -262,7 +262,7 @@ export function NodeConfigModal({ isOpen, config, localNodeStatus, isSaving, onS
 
 						{(['payoutParamsPath', 'payoutSignersPath'] as const).map((key) => (
 							<label className="block text-body-sm" key={key}>
-								{key === 'payoutParamsPath' ? 'Payout admin params.toml path' : 'Payout admin signer file path'}
+								{key === 'payoutParamsPath' ? 'Payout admin params.toml path' : 'Payout admin signers.toml path'}
 								<input
 									className="w-full rounded-lg border px-3 py-2"
 									value={draft[key] ?? ''}

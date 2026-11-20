@@ -4,11 +4,13 @@ import type { PasteResult } from '../hooks/use-payout-admin'
 
 type Props = {
 	txId: string
+	/** Why the last import failed as a whole, for example the coordinator did not answer. */
+	error: string | null
 	onSubmit: (txId: string, raw: string) => Promise<PasteResult>
 	onClose: () => void
 }
 
-export function PasteSignaturesModal({ txId, onSubmit, onClose }: Props) {
+export function PasteSignaturesModal({ txId, error, onSubmit, onClose }: Props) {
 	const [raw, setRaw] = useState('')
 	const [result, setResult] = useState<PasteResult | null>(null)
 
@@ -53,6 +55,8 @@ export function PasteSignaturesModal({ txId, onSubmit, onClose }: Props) {
 					}}
 					spellCheck={false}
 				/>
+
+				{error && <p className="m-0 text-body-sm text-danger-deep">{error}</p>}
 
 				{errorMessage && (
 					<div className="rounded-xl border border-danger-border bg-danger-surface px-4 py-3">

@@ -20,7 +20,7 @@ export function PayoutModal({
 				role="dialog"
 				aria-modal="true"
 				aria-label="Payout Administrator"
-				className={`max-h-[90vh] w-full ${wide ? 'max-w-150' : 'max-w-120'} overflow-y-auto rounded-2xl border border-[#e5e7eb] bg-white p-6 shadow-xl [&_button]:m-1 [&_button]:rounded-lg [&_button]:border [&_button]:px-3 [&_button]:py-2 [&_button]:text-body-sm [&_button:disabled]:opacity-50 [&_p]:my-2`}
+				className={`max-h-[90vh] w-full ${wide ? 'max-w-150' : 'max-w-120'} overflow-y-auto rounded-2xl border border-[#e5e7eb] bg-white p-6 shadow-xl`}
 			>
 				{children}
 			</div>

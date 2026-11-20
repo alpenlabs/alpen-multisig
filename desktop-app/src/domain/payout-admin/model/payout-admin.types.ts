@@ -18,4 +18,5 @@ export type PastBlockPayoutsTx = {
 	rawTx: string
 }
 
-export type ActiveModal = { kind: 'paste'; txId: string } | { kind: 'create' } | null
+// 'create' replaces the lists with the Block payouts page; the other two are dialogs.
+export type ActiveModal = { kind: 'paste'; txId: string } | { kind: 'create' } | { kind: 'import' } | null

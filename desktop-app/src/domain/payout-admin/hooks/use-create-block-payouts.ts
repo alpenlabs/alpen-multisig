@@ -1,7 +1,9 @@
 import { feeRateTenths } from '../model/payout-mapping'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as api from '@/api/payout-admin'
 import { unwrap } from './use-payout-admin'
+
+const PREVIEW_DELAY_MS = 400
 
 export function useCreateBlockPayouts() {
 	const [text, setText] = useState('')
@@ -10,12 +12,39 @@ export function useCreateBlockPayouts() {
 	const [bundle, setBundle] = useState<api.PayoutBundle | null>(null)
 	const [removed, setRemoved] = useState<string[]>([])
 	const [confirmed, setConfirmed] = useState<string[]>([])
+	const [previewing, setPreviewing] = useState(false)
+	const [previewError, setPreviewError] = useState<string | null>(null)
+	// Only the answer to the latest request may become the preview.
+	const latest = useRef(0)
+	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 	const rate = feeRateTenths(fee)
 
-	const rebundle = async (excluded = removed, verified = reports) => {
-		setBundle(null)
+	useEffect(() => () => clearTimeout(timer.current), [])
 
-		if (verified && rate !== null) setBundle(await unwrap(api.payoutBundle(verified.verificationId, rate, excluded)))
+	const rebundle = async (excluded = removed, verified = reports, feeRate = rate) => {
+		latest.current += 1
+		const request = latest.current
+		clearTimeout(timer.current)
+		setBundle(null)
+		setPreviewError(null)
+
+		if (!verified || feeRate === null) return
+
+		const result = await unwrap(api.payoutBundle(verified.verificationId, feeRate, excluded))
+
+		if (request === latest.current) setBundle(result)
+	}
+
+	// The fee preview follows the fee field by itself. It does not lock the screen, so typing is not interrupted.
+	const preview = async (feeRate: number | null) => {
+		setPreviewing(true)
+		try {
+			await rebundle(removed, reports, feeRate)
+		} catch (error) {
+			setPreviewError(error instanceof Error ? error.message : String(error))
+		} finally {
+			setPreviewing(false)
+		}
 	}
 
 	return {
@@ -24,19 +53,33 @@ export function useCreateBlockPayouts() {
 		reports,
 		bundle,
 		rate,
+		previewing,
+		previewError,
+		confirmedCount: confirmed.length,
 
 		setText: (value: string) => {
+			latest.current += 1
+			clearTimeout(timer.current)
 			setText(value)
 			setReports(null)
 			setBundle(null)
 			setRemoved([])
 			setConfirmed([])
+			setPreviewError(null)
 		},
 
 		setFee: (value: string) => {
+			latest.current += 1
+			clearTimeout(timer.current)
 			setFee(value)
 			setBundle(null)
+			setPreviewError(null)
+			const next = feeRateTenths(value)
+
+			if (reports && next !== null) timer.current = setTimeout(() => void preview(next), PREVIEW_DELAY_MS)
 		},
+
+		retryPreview: () => preview(rate),
 
 		verify: async () => {
 			setReports(null)
@@ -47,8 +90,6 @@ export function useCreateBlockPayouts() {
 			setReports(result)
 			await rebundle([], result)
 		},
-
-		rebundle: () => rebundle(),
 
 		remove: async (outpoint: string) => {
 			const next = [...removed, outpoint]

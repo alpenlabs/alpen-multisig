@@ -50,10 +50,13 @@ const { readFileSync } = await import('node:fs')
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
 const screen = read('../../../screens/payout-admin-screen.tsx')
 assert.match(screen, /<WalletSessionControl\s+hideAdminId/)
-assert.match(screen, /navigate\('\/'\).*Back to multisig selection/)
+assert.match(screen, /navigate\('\/'\)[^<]*>\s*Back to multisig selection/)
 assert.doesNotMatch(read('../../../screens/wallet-connect-screen.tsx'), /Payout Administrator \(Ledger\)/)
 assert.match(read('../../admin-wallet/components/wallet-session-control.tsx'), /hideAdminId=\{hideAdminId\}/)
-assert.match(read('../components/payout-sign-in-panel.tsx'), /Expected address: \{hook.identity.expectedAddress\}/)
+assert.match(
+	read('../components/payout-sign-in-panel.tsx'),
+	/<KeyValue label="Expected address" mono>\s*\{identity.expectedAddress\}/,
+)
 
 const app = read('../../../../src-tauri/src/application/payout_admin.rs')
 const importing = app.slice(app.indexOf('pub async fn import_psbt('), app.indexOf('pub async fn paste_signatures('))

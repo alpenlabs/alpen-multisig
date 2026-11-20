@@ -18,11 +18,17 @@ export function usePayoutAdmin() {
 	const [session, setSession] = useState<api.PayoutSession | null>(null)
 	const [identity, setIdentity] = useState<api.PayoutIdentity | null>(null)
 	const [deployment, setDeployment] = useState<api.PayoutDeployment | null>(null)
+	// Why the payout admin files were refused; stays until a load succeeds or the admin signs out.
+	const [deploymentError, setDeploymentError] = useState<string | null>(null)
 	const [activeModal, setActiveModal] = useState<ActiveModal>(null)
 	const [review, setReview] = useState<api.PayoutReview | api.PayoutSignInReview | null>(null)
 	const [confirm, setConfirm] = useState<(() => Promise<void>) | null>(null)
 	const [toast, setToast] = useState<string | null>(null)
-	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+	// What the app is doing right now, shown next to a spinner; null when idle.
+	const [working, setWorking] = useState<string | null>(null)
+	// True while the Ledger shows its screens for the open review.
+	const [signing, setSigning] = useState(false)
 	const lock = useRef(false)
 
 	const clearSession = useCallback(() => {
@@ -38,25 +44,26 @@ export function usePayoutAdmin() {
 		(message: string) => {
 			if (/^(Coordinator 401\b|Sign in again: session expired)/.test(message)) clearSession()
 
-			setToast(message)
+			setError(message)
 		},
 		[clearSession],
 	)
 
 	const run = useCallback(
-		async (action: () => Promise<void>) => {
+		async (action: () => Promise<void>, label = 'Working…') => {
 			if (lock.current) return
 
 			lock.current = true
-			setBusy(true)
+			setWorking(label)
 			setToast(null)
+			setError(null)
 			try {
 				await action()
 			} catch (error) {
 				handleError(String(error instanceof Error ? error.message : error))
 			} finally {
 				lock.current = false
-				setBusy(false)
+				setWorking(null)
 			}
 		},
 		[handleError],
@@ -109,6 +116,14 @@ export function usePayoutAdmin() {
 		}
 	}, [session, clearSession, handleError])
 
+	useEffect(() => {
+		if (!toast) return
+
+		const timer = setTimeout(() => setToast(null), 4000)
+
+		return () => clearTimeout(timer)
+	}, [toast])
+
 	const closeModal = () => {
 		if (!lock.current) {
 			setActiveModal(null)
@@ -125,9 +140,11 @@ export function usePayoutAdmin() {
 		setReview(value)
 		// The review stays open while the Ledger shows its screens, so the admin can compare them.
 		setConfirm(() => async () => {
+			setSigning(true)
 			try {
 				await action(value.reviewId)
 			} finally {
+				setSigning(false)
 				setReview(null)
 				setConfirm(null)
 			}
@@ -161,10 +178,16 @@ export function usePayoutAdmin() {
 		session,
 		identity,
 		deployment,
+		deploymentError,
 		review,
-		busy,
+		signing,
+		busy: working !== null,
+		working,
 		run,
 		toast,
+		error,
+		dismissError: () => setError(null),
+		toSign: pendingTxs.filter((tx) => !tx.signedByCurrentUser).length,
 		activeModal,
 		hasConflicts: pendingTxs.some((tx) => tx.inputs.some((input) => input.isConflicting)),
 		closeModal,
@@ -175,57 +198,92 @@ export function usePayoutAdmin() {
 			setConfirm(null)
 		},
 
+		// Signs out and forgets the loaded payout admin files. The Ledger identity stays: no setting changes it.
 		reset: () => {
 			clearSession()
 			setDeployment(null)
-			setIdentity(null)
+			setDeploymentError(null)
 		},
 
 		readIdentity: () =>
 			run(async () => {
 				setIdentity(null)
 				setIdentity(await unwrap(api.payoutIdentity()))
-			}),
+			}, 'Reading the Ledger identity…'),
 
 		showKey: () =>
 			run(async () => {
 				setIdentity(await unwrap(api.payoutShowKey()))
-			}),
+			}, 'Check the address on your Ledger…'),
 
 		loadDeployment: (params: string, signers: string) =>
 			run(async () => {
 				setDeployment(null)
-				try {
-					setDeployment(await unwrap(api.payoutLoadDeployment(params, signers)))
-				} catch (error) {
-					throw new Error(`Deployment / signer file refused: ${String(error)}`)
-				}
-			}),
+				setDeploymentError(null)
+				const result = await api.payoutLoadDeployment(params, signers)
 
+				if (result.ok) setDeployment(result.data)
+				else setDeploymentError(result.error)
+			}, 'Loading params.toml and signers.toml…'),
+
+		// Starts the Ledger at once: the sign-in review has nothing to decide on this screen, only text to compare.
 		signIn: (url: string) =>
-			run(() =>
-				prepare(api.payoutSignInReview(url), async (id) => {
-					setSession(await unwrap(api.payoutSignIn(id)))
-				}),
-			),
+			run(async () => {
+				if (!identity) setIdentity(await unwrap(api.payoutIdentity()))
+
+				const value = await unwrap(api.payoutSignInReview(url))
+				setReview(value)
+				setSigning(true)
+				try {
+					setSession(await unwrap(api.payoutSignIn(value.reviewId)))
+				} finally {
+					setSigning(false)
+					setReview(null)
+				}
+			}, 'Waiting for your Ledger…'),
 
 		confirmReview: () =>
 			run(async () => {
 				if (confirm) await confirm()
-			}),
+			}, 'Waiting for your Ledger…'),
 
 		openSignModal: (txid: string) =>
-			run(() =>
-				prepare(api.payoutReviewPending(txid), async (id) => {
-					const result = showPaste(await unwrap(api.payoutSignPending(id)))
-					await refresh()
+			run(
+				() =>
+					prepare(api.payoutReviewPending(txid), async (id) => {
+						const result = showPaste(await unwrap(api.payoutSignPending(id)))
+						await refresh()
 
-					if (!result.ok) setToast(result.invalidSignatures.join('\n'))
-				}),
+						if (result.ok) setToast('Signature added.')
+						else setError(result.invalidSignatures.join('\n'))
+					}),
+				'Checking the transaction…',
 			),
 
-		openPasteModal: (txId: string) => setActiveModal({ kind: 'paste', txId }),
-		openCreateModal: () => setActiveModal({ kind: 'create' }),
+		openPasteModal: (txId: string) => {
+			setError(null)
+			setActiveModal({ kind: 'paste', txId })
+		},
+
+		openCreateModal: () => {
+			setError(null)
+			setActiveModal({ kind: 'create' })
+		},
+
+		openImportModal: () => {
+			setError(null)
+			setActiveModal({ kind: 'import' })
+		},
+
+		finishCreate: (created: number) => {
+			setActiveModal(null)
+			setActiveTab('pending')
+			setToast(
+				created === 1
+					? 'The block payouts transaction is now pending. The other admins can sign it.'
+					: `${created} block payouts transactions are now pending. The other admins can sign them.`,
+			)
+		},
 
 		handlePasteSignatures: async (txid: string, text: string): Promise<PasteResult> => {
 			let result: PasteResult = { ok: false, invalidSignatures: ['Import failed; see error message.'] }
@@ -237,11 +295,17 @@ export function usePayoutAdmin() {
 			return result
 		},
 
-		handleImport: (text: string) =>
-			run(async () => {
+		handleImport: async (text: string): Promise<boolean> => {
+			let imported = false
+			await run(async () => {
 				await unwrap(api.payoutImportPsbt(text))
 				await refresh()
-			}),
+				imported = true
+				setToast('PSBT imported.')
+			}, 'Importing the PSBT…')
+
+			return imported
+		},
 
 		handleExport: (id: string) =>
 			run(async () => {
@@ -283,12 +347,14 @@ export function usePayoutAdmin() {
 			}),
 
 		reviewTransaction: (bundleId: string, id: string, onConfirmed: () => void) =>
-			run(() =>
-				prepare(api.payoutReviewTransaction(bundleId, id), async (reviewId) => {
-					await unwrap(api.payoutConfirmTransaction(reviewId))
-					onConfirmed()
-					await refresh()
-				}),
+			run(
+				() =>
+					prepare(api.payoutReviewTransaction(bundleId, id), async (reviewId) => {
+						await unwrap(api.payoutConfirmTransaction(reviewId))
+						onConfirmed()
+						await refresh()
+					}),
+				'Preparing the transaction…',
 			),
 	}
 }
