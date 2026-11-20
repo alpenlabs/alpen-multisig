@@ -21,6 +21,7 @@
 //! script, internal key and witness layout are the bridge's, byte for byte.
 
 pub mod block_payouts_tx;
+pub mod bundler;
 pub mod deployment;
 pub mod fees;
 pub mod report;
