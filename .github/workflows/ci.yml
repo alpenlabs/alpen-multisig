@@ -28,6 +28,7 @@ jobs:
               - 'orchestrator-be/**'
               - 'desktop-app/**'
               - 'e2e-tests/**'
+              - 'payout-admin-core/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               # Root npm manifest/lockfile drive `npm ci` and the `npm audit` gate,
