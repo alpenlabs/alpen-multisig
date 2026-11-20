@@ -2,6 +2,9 @@ use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub payout_params_path: Option<String>,
+    pub payout_admin_public_url: Option<String>,
+    pub payout_electrum_url: String,
     pub server_host: String,
     pub server_port: u16,
     pub auth_challenge_ttl_ms: u64,
@@ -62,6 +65,14 @@ impl Config {
         ensure_asm_rpc_url_allowed(&strata_admin_state_rpc_url, ASM_MOCKS_COMPILED)?;
 
         Ok(Self {
+            payout_params_path: std::env::var("PAYOUT_PARAMS_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            payout_admin_public_url: std::env::var("PAYOUT_ADMIN_PUBLIC_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
+            payout_electrum_url: std::env::var("PAYOUT_ELECTRUM_URL")
+                .unwrap_or_else(|_| "tcp://127.0.0.1:50001".into()),
             server_host: std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             server_port: std::env::var("SERVER_PORT")
                 .unwrap_or_else(|_| "3000".to_string())

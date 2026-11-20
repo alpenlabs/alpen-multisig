@@ -12,6 +12,7 @@ mod domain;
 mod error;
 mod handlers;
 mod infrastructure;
+mod payout_admin;
 mod state;
 
 #[tokio::main]
@@ -34,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
     ));
     warn_without_txindex(btc_client.clone());
 
+    let mut payout_pool = None;
     let state = if let Some(database_url) = &config.database_url {
         let pool = PgPoolOptions::new()
             .max_connections(10)
@@ -46,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
             .run(&pool)
             .await
             .context("failed to run database migrations")?;
+        payout_pool = Some(pool.clone());
         let repo = Arc::new(infrastructure::postgres_repo::PostgresProposalRepository::new(pool));
         state::AppState::new(
             repo,
@@ -81,7 +84,9 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers(Any)
         .allow_origin(Any);
 
+    let payout_routes = payout_admin::router(&config, payout_pool).await?;
     let app = Router::new()
+        .merge(payout_routes)
         .nest("/api/v1", handlers::router(state))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
