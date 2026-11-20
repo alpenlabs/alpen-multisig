@@ -91,6 +91,10 @@ pub static CONTEST_TIMELOCK: LazyLock<bitcoin::relative::Height> = LazyLock::new
     bitcoin::relative::Height::from_height(params.protocol.contest_timelock)
 });
 
+#[cfg(test)]
+pub(crate) static P2TR_PLACEHOLDER_SCRIPT: LazyLock<ScriptBuf> =
+    LazyLock::new(|| ScriptBuf::from_bytes([&[0x51, 0x20][..], &[0x02; 32][..]].concat()));
+
 pub const NEW_CLAIM_HEIGHT: u64 = 500;
 
 pub struct Fixture {
@@ -502,4 +506,117 @@ impl GameTxs {
             })
             .collect()
     }
+}
+
+// ── Block payouts transaction helpers ──────────────────────────────────────────────
+
+use crate::block_payouts_tx::{
+    add_signature_with_analysis, analyze, key_sighash, ChangeOutput, FeeInput,
+};
+use bitcoin::{bip32::DerivationPath, key::TapTweak, psbt::Psbt, taproot, TapSighashType};
+
+pub fn fee_coin(fixture: &Fixture, admin: usize, index: u32, value: u64) -> FeeInput {
+    fee_coin_at(
+        fixture,
+        admin,
+        index,
+        value,
+        OutPoint::new(Txid::from_byte_array([200 + index as u8; 32]), index),
+    )
+}
+
+pub fn fee_coin_at(
+    fixture: &Fixture,
+    admin: usize,
+    index: u32,
+    value: u64,
+    outpoint: OutPoint,
+) -> FeeInput {
+    let secp = Secp256k1::new();
+    let key = fee_key(fixture, admin, index);
+    let internal = key.x_only_public_key().0;
+
+    FeeInput::new(
+        outpoint,
+        &TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: ScriptBuf::new_p2tr(&secp, internal, None),
+        },
+        internal,
+        fixture.fingerprint(admin),
+        DerivationPath::from_str(&format!("m/86'/1'/73'/0/{index}")).unwrap(),
+    )
+    .unwrap()
+}
+
+pub fn fee_key(fixture: &Fixture, admin: usize, index: u32) -> Keypair {
+    let secp = Secp256k1::new();
+    let derived_key = fixture
+        .account_xpriv(admin)
+        .derive_priv(
+            &secp,
+            &DerivationPath::from_str(&format!("m/0/{index}")).unwrap(),
+        )
+        .unwrap();
+
+    Keypair::from_secret_key(&secp, &derived_key.private_key)
+}
+
+pub fn change(fixture: &Fixture, value: u64) -> ChangeOutput {
+    let secp = Secp256k1::new();
+    let derived_key = fixture
+        .account_xpriv(0)
+        .derive_priv(&secp, &DerivationPath::from_str("m/1/0").unwrap())
+        .unwrap();
+
+    ChangeOutput::new(
+        Amount::from_sat(value),
+        derived_key.private_key.x_only_public_key(&secp).0,
+        fixture.fingerprint(0),
+        DerivationPath::from_str("m/86'/1'/73'/1/0").unwrap(),
+    )
+    .unwrap()
+}
+
+/// Signs every connector input as admin `admin`, the way a device does.
+pub fn sign_as(fixture: &Fixture, deployment: &Deployment, psbt: &mut Psbt, admin: usize) {
+    let analysis = analyze(deployment, psbt).unwrap();
+    let keypair = fixture.admin_keypair(admin);
+    let secp = Secp256k1::new();
+    let mut added = std::collections::BTreeSet::new();
+    for connector_input in analysis.connector_inputs() {
+        let signature = secp.sign_schnorr(&connector_input.sighash(), &keypair);
+        add_signature_with_analysis(
+            deployment,
+            psbt,
+            &analysis,
+            &mut added,
+            connector_input.input_index(),
+            &keypair.x_only_public_key().0,
+            signature,
+        )
+        .unwrap();
+    }
+}
+
+pub fn sign_fee(fixture: &Fixture, psbt: &mut Psbt, coin: &FeeInput, index: u32) {
+    let secp = Secp256k1::new();
+    let i = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .position(|input| input.previous_output == coin.outpoint())
+        .unwrap();
+    let prevouts: Vec<_> = psbt
+        .inputs
+        .iter()
+        .map(|input| input.witness_utxo.clone().unwrap())
+        .collect();
+    let message = key_sighash(&psbt.unsigned_tx, &prevouts, i).unwrap();
+    let tweaked = fee_key(fixture, 0, index).tap_tweak(&secp, None);
+    let signature = secp.sign_schnorr(&message, &tweaked.to_keypair());
+    psbt.inputs[i].tap_key_sig = Some(taproot::Signature {
+        signature,
+        sighash_type: TapSighashType::Default,
+    });
 }

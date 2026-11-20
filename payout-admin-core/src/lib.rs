@@ -20,6 +20,7 @@
 //! The connector itself is built with the bridge's own code (`strata-bridge-connectors`), so its
 //! script, internal key and witness layout are the bridge's, byte for byte.
 
+pub mod block_payouts_tx;
 pub mod deployment;
 pub mod fees;
 pub mod report;
