@@ -1244,3 +1244,5 @@ mod app_check_tests {
         assert!(err.contains("needs the Bitcoin Test app"), "{err}");
     }
 }
+
+pub mod payout_admin;

@@ -1655,6 +1655,7 @@ dependencies = [
  "ledger-apdu",
  "ledger-transport-hid",
  "ledger_bitcoin_client",
+ "payout-admin-core",
  "protobuf",
  "rand 0.8.6",
  "reqwest 0.12.28",

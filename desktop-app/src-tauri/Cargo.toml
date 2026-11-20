@@ -18,11 +18,12 @@ dev-mocks = []
 tauri-build = { version = '2', features = [] }
 
 [dependencies]
+payout-admin-core = { workspace = true }
 tauri = { version = '2', features = [] }
 serde = { version = '1', features = ['derive'] }
 serde_json = '1'
 reqwest = { version = '0.12', features = ['json'] }
-uuid = { version = '1', features = ['v4'] }
+uuid = { version = '1', features = ['v4', 'serde'] }
 tokio = { version = '1', features = ['full'] }
 dotenvy = "0.15"
 arboard = "3"
@@ -76,6 +77,7 @@ bdk_wallet = { workspace = true }
 bdk_electrum = { workspace = true }
 
 [dev-dependencies]
+payout-admin-core = { workspace = true, features = ["test-support"] }
 # Wallet sync uses Electrum (bdk_electrum); Core RPC stays only as the regtest
 # funding/mining harness in integration tests.
 bdk_bitcoind_rpc = { workspace = true }
