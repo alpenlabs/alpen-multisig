@@ -46,6 +46,13 @@ fn main() {
                     .clone(),
                 Arc::clone(&node_config_arc),
             );
+            app.manage(
+                desktop_app::application::payout_admin::PayoutAdminState::new(
+                    node_config_arc.clone(),
+                    wallet_session.clone(),
+                    app.path().app_data_dir().ok(),
+                ),
+            );
             app.manage(NodeConfigState(node_config_arc));
             app.manage(wallet_session);
             // Fee cache (M2): survives across fee_rates_estimate calls; estimators

@@ -359,6 +359,7 @@ pub struct BumpFeeInput {
 /// node RPC fallback) and re-syncs so the panel converges.
 #[tauri::command]
 pub async fn admin_wallet_bump_fee(
+    payouts: tauri::State<'_, desktop_app::application::payout_admin::PayoutAdminState>,
     input: BumpFeeInput,
     wallet_session: tauri::State<'_, WalletSession>,
     node_config: tauri::State<'_, NodeConfigState>,
@@ -368,6 +369,7 @@ pub async fn admin_wallet_bump_fee(
     let rate = FeeRate::new(input.fee_rate_sat_per_kvb, FALLBACK_MIN_RELAY_SAT_PER_KVB)
         .map_err(|e| serialize_bump_error(&BumpFeeError::from(e)))?;
 
+    let _payout_guard = payouts.refresh_own_pending_reservations().await?;
     let svc = wallet_session
         .current_or_fallback()
         .map_err(serialize_wallet_error)?;
@@ -450,6 +452,7 @@ pub async fn admin_wallet_validate_send_address(
 /// before Confirm. No signer required — watch-only sessions may preview.
 #[tauri::command]
 pub async fn admin_wallet_estimate_send(
+    payouts: tauri::State<'_, desktop_app::application::payout_admin::PayoutAdminState>,
     input: SendInput,
     wallet_session: tauri::State<'_, WalletSession>,
 ) -> Result<SendEstimateDto, String> {
@@ -458,6 +461,7 @@ pub async fn admin_wallet_estimate_send(
     let svc = wallet_session
         .current_or_fallback()
         .map_err(serialize_wallet_error)?;
+    let _payout_guard = payouts.refresh_own_pending_reservations().await?;
     svc.estimate_send(&input, rate)
         .await
         .map_err(|e| serialize_send_error(&e))
@@ -471,6 +475,7 @@ pub async fn admin_wallet_estimate_send(
 /// the panel converges (balance drops, pending list shows the send).
 #[tauri::command]
 pub async fn admin_wallet_send(
+    payouts: tauri::State<'_, desktop_app::application::payout_admin::PayoutAdminState>,
     input: SendInput,
     wallet_session: tauri::State<'_, WalletSession>,
     node_config: tauri::State<'_, NodeConfigState>,
@@ -502,6 +507,7 @@ pub async fn admin_wallet_send(
         tracing::warn!(error = %e, "pre-send sync failed; proceeding with last-known wallet state");
     }
 
+    let _payout_guard = payouts.refresh_own_pending_reservations().await?;
     let result = svc
         .send_to_address(&input, rate, &broadcasters)
         .await
