@@ -79,7 +79,8 @@ impl Config {
             database_url: {
                 let url = std::env::var("DATABASE_URL")
                     .ok()
-                    .map(|s| s.trim().to_string());
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
                 let profile = std::env::var("ORCHESTRATOR_PROFILE").unwrap_or_default();
                 if profile.eq_ignore_ascii_case("production") && url.is_none() {
                     anyhow::bail!("DATABASE_URL is required when ORCHESTRATOR_PROFILE=production");
@@ -143,6 +144,30 @@ mod tests {
         std::env::remove_var("DATABASE_URL");
         let err = Config::from_env().unwrap_err();
         assert!(err.to_string().contains("DATABASE_URL"));
+
+        std::env::set_var("DATABASE_URL", "   ");
+        let err = Config::from_env().unwrap_err();
+        assert!(err.to_string().contains("DATABASE_URL"));
+
+        std::env::remove_var("DATABASE_URL");
         std::env::remove_var("ORCHESTRATOR_PROFILE");
+    }
+
+    #[test]
+    fn staging_compose_requires_external_database_url() {
+        let compose = include_str!("../../staging/docker-compose.yml");
+        let database_url_entries: Vec<_> = compose
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("DATABASE_URL:"))
+            .collect();
+        let production_profile_entries: Vec<_> = compose
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("ORCHESTRATOR_PROFILE:"))
+            .collect();
+
+        assert_eq!(database_url_entries, [r#"DATABASE_URL: "${DATABASE_URL:-}""#]);
+        assert_eq!(production_profile_entries, ["ORCHESTRATOR_PROFILE: production"]);
     }
 }
