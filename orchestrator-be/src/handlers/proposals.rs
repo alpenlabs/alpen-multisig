@@ -306,9 +306,11 @@ pub async fn approve_action(
 
     let proposal = proposals::approve_action(
         state.repo.as_ref(),
+        &state.asm_rpc_url,
+        state.network,
         proposals::SessionContext {
             authority: auth.authority,
-            signer_pubkey: &sig.signer_pubkey,
+            signer_pubkey: &auth.signer_pubkey,
         },
         &ActionId(action_id),
         &sig,

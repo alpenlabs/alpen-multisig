@@ -9,9 +9,10 @@ use crate::domain::proposal::{
     ProposalStatus, SeqNo,
 };
 use crate::error::AppError;
+use crate::infrastructure::action_codec;
 use crate::infrastructure::asm_role_membership::{
-    last_seqno_for_authority, lock_period_for_action, threshold_for_authority,
-    update_id_in_queue_for_action,
+    is_signer_member_for_authority, last_seqno_for_authority, lock_period_for_action,
+    threshold_for_authority, update_id_in_queue_for_action,
 };
 use crate::infrastructure::bitcoin_rpc::BitcoinRpcClient;
 use chrono::{DateTime, Utc};
@@ -103,17 +104,105 @@ pub(crate) async fn create_update_action(
 /// Mirrors PRD: `approve_action(id, sig)`.
 pub(crate) async fn approve_action(
     repo: &dyn ProposalRepository,
+    asm_rpc_url: &str,
+    network: bitcoin::Network,
     session: SessionContext<'_>,
     action_id: &ActionId,
     sig: &ProposalSignature,
 ) -> Result<Proposal, AppError> {
+    if !sig
+        .signer_pubkey
+        .eq_ignore_ascii_case(session.signer_pubkey)
+    {
+        return Err(AppError::Unauthorized);
+    }
+
+    if !is_signer_member_for_authority(asm_rpc_url, session.authority, session.signer_pubkey)
+        .await?
+    {
+        return Err(AppError::Unauthorized);
+    }
+
     let existing = repo.find_by_action_id(action_id).await?;
     let proposal = existing.ok_or(AppError::NotFound)?;
     if proposal.authority != session.authority {
         return Err(AppError::Unauthorized);
     }
 
-    let signer_pubkey = normalize_signer_pubkey_hex(&sig.signer_pubkey);
+    verify_approval_signature(
+        &proposal,
+        session.signer_pubkey,
+        &sig.signature_hex,
+        network,
+    )?;
+
+    add_approval(repo, proposal, session.signer_pubkey, &sig.signature_hex).await
+}
+
+fn verify_approval_signature(
+    proposal: &Proposal,
+    signer_pubkey: &str,
+    signature_hex: &str,
+    network: bitcoin::Network,
+) -> Result<(), AppError> {
+    use bitcoin::secp256k1::{
+        ecdsa::{RecoverableSignature, RecoveryId, Signature},
+        Message, PublicKey, Secp256k1,
+    };
+
+    let action = action_codec::decode_multisig_action_hex(&proposal.action_hex)
+        .map_err(AppError::BadRequest)?;
+    let sighash = strata_asm_txs_admin::signing_message::SigningMessage::for_action(
+        &action,
+        proposal.seq_no,
+        network,
+    )
+    .compute_sighash()
+    .0;
+    let message = Message::from_digest(sighash);
+
+    let pubkey_bytes = hex::decode(signer_pubkey).map_err(|_| AppError::Unauthorized)?;
+    let pubkey = PublicKey::from_slice(&pubkey_bytes).map_err(|_| AppError::Unauthorized)?;
+    let signature_bytes = hex::decode(signature_hex)
+        .map_err(|_| AppError::BadRequest("invalid approval signature".to_string()))?;
+    if signature_bytes.len() != 64 && signature_bytes.len() != 65 {
+        return Err(AppError::BadRequest(
+            "invalid approval signature".to_string(),
+        ));
+    }
+
+    let signature = Signature::from_compact(&signature_bytes[..64])
+        .map_err(|_| AppError::BadRequest("invalid approval signature".to_string()))?;
+    let secp = Secp256k1::new();
+    secp.verify_ecdsa(&message, &signature, &pubkey)
+        .map_err(|_| AppError::BadRequest("invalid approval signature".to_string()))?;
+
+    if signature_bytes.len() == 65 {
+        let recovery_id = RecoveryId::from_i32(i32::from(signature_bytes[64]))
+            .map_err(|_| AppError::BadRequest("invalid approval signature".to_string()))?;
+        let recoverable =
+            RecoverableSignature::from_compact(&signature_bytes[..64], recovery_id)
+                .map_err(|_| AppError::BadRequest("invalid approval signature".to_string()))?;
+        let recovered = secp
+            .recover_ecdsa(&message, &recoverable)
+            .map_err(|_| AppError::BadRequest("invalid approval signature".to_string()))?;
+        if recovered != pubkey {
+            return Err(AppError::BadRequest(
+                "invalid approval signature".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+async fn add_approval(
+    repo: &dyn ProposalRepository,
+    proposal: Proposal,
+    authenticated_signer_pubkey: &str,
+    signature_hex: &str,
+) -> Result<Proposal, AppError> {
+    let signer_pubkey = normalize_signer_pubkey_hex(authenticated_signer_pubkey);
 
     let already_signed = proposal
         .signatures
@@ -125,12 +214,29 @@ pub(crate) async fn approve_action(
     }
 
     let updated = repo
-        .add_signature(action_id, &signer_pubkey, &sig.signature_hex)
+        .add_signature(&proposal.action_id, &signer_pubkey, signature_hex)
         .await?;
 
     let proposal = updated.ok_or(AppError::NotFound)?;
 
     Ok(proposal)
+}
+
+#[cfg(test)]
+async fn persist_approval(
+    repo: &dyn ProposalRepository,
+    session: SessionContext<'_>,
+    action_id: &ActionId,
+    sig: &ProposalSignature,
+) -> Result<Proposal, AppError> {
+    let proposal = repo
+        .find_by_action_id(action_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if proposal.authority != session.authority {
+        return Err(AppError::Unauthorized);
+    }
+    add_approval(repo, proposal, session.signer_pubkey, &sig.signature_hex).await
 }
 
 /// Whether off-chain quorum is satisfied (coordination only — not on-chain validity).
@@ -1893,6 +1999,7 @@ mod tests {
         test_fixture_action_hex, test_fixture_council_rotation_action_hex,
         test_fixture_defcon_1_action_hex, test_fixture_safe_harbor_address_action_hex,
     };
+    use crate::infrastructure::asm_role_membership::MOCK_MEMBERSHIP_URL;
     use crate::infrastructure::bitcoin_rpc::{BitcoinRpcClient, MinedReveal, TxIndex};
     use crate::infrastructure::memory_repo::InMemoryProposalRepository;
     use serde_json::json;
@@ -1949,6 +2056,52 @@ mod tests {
                 .to_string(),
             signature_hex: "sig_b".to_string(),
         }
+    }
+
+    fn signed_approval(
+        action_hex: &str,
+        seq_no: u64,
+        secret_scalar: u8,
+        network: bitcoin::Network,
+        recoverable: bool,
+    ) -> ProposalSignature {
+        use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
+
+        let mut secret_bytes = [0u8; 32];
+        secret_bytes[31] = secret_scalar;
+        let secret_key = SecretKey::from_slice(&secret_bytes).expect("valid secret scalar");
+        let secp = Secp256k1::new();
+        let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+        let action = action_codec::decode_multisig_action_hex(action_hex).expect("valid action");
+        let sighash = strata_asm_txs_admin::signing_message::SigningMessage::for_action(
+            &action, seq_no, network,
+        )
+        .compute_sighash()
+        .0;
+        let message = Message::from_digest(sighash);
+
+        let signature_hex = if recoverable {
+            let (recovery_id, compact) = secp
+                .sign_ecdsa_recoverable(&message, &secret_key)
+                .serialize_compact();
+            let mut bytes = [0u8; 65];
+            bytes[..64].copy_from_slice(&compact);
+            bytes[64] = recovery_id.to_i32() as u8;
+            hex::encode(bytes)
+        } else {
+            hex::encode(secp.sign_ecdsa(&message, &secret_key).serialize_compact())
+        };
+
+        ProposalSignature {
+            signer_pubkey: hex::encode(public_key.serialize()),
+            signature_hex,
+        }
+    }
+
+    fn assert_only_signature(proposal: &Proposal, expected: &ProposalSignature) {
+        assert_eq!(proposal.signatures.len(), 1);
+        assert_eq!(proposal.signatures[0].signer_pubkey, expected.signer_pubkey);
+        assert_eq!(proposal.signatures[0].signature_hex, expected.signature_hex);
     }
 
     #[test]
@@ -2236,7 +2389,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        let updated = approve_action(&repo, session_b, &created.action_id, &sig_b())
+        let updated = persist_approval(&repo, session_b, &created.action_id, &sig_b())
             .await
             .unwrap();
 
@@ -2245,6 +2398,185 @@ mod tests {
             updated.signatures[1].signer_pubkey,
             "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
         );
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_request_signer_different_from_authenticated_signer() {
+        let repo = new_repo();
+        let action_hex = test_fixture_action_hex();
+        let first = signed_approval(&action_hex, 1, 1, bitcoin::Network::Regtest, false);
+        let created = create_update_action(
+            &repo,
+            SessionContext {
+                authority: Authority::StrataAdmin,
+                signer_pubkey: &first.signer_pubkey,
+            },
+            1,
+            &action_hex,
+            &first,
+            2,
+            None,
+        )
+        .await
+        .unwrap();
+        let other_signer = signed_approval(&action_hex, 1, 2, bitcoin::Network::Regtest, false);
+
+        let error = approve_action(
+            &repo,
+            MOCK_MEMBERSHIP_URL,
+            bitcoin::Network::Regtest,
+            SessionContext {
+                authority: Authority::StrataAdmin,
+                signer_pubkey: &first.signer_pubkey,
+            },
+            &created.action_id,
+            &other_signer,
+        )
+        .await
+        .expect_err("request signer cannot replace authenticated signer");
+
+        assert!(matches!(error, AppError::Unauthorized));
+        let stored = repo
+            .find_by_action_id(&created.action_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_only_signature(&stored, &first);
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_signature_not_made_by_authenticated_signer() {
+        let repo = new_repo();
+        let action_hex = test_fixture_action_hex();
+        let first = signed_approval(&action_hex, 1, 1, bitcoin::Network::Regtest, false);
+        let created = create_update_action(
+            &repo,
+            SessionContext {
+                authority: Authority::StrataAdmin,
+                signer_pubkey: &first.signer_pubkey,
+            },
+            1,
+            &action_hex,
+            &first,
+            2,
+            None,
+        )
+        .await
+        .unwrap();
+        let signer = signed_approval(&action_hex, 1, 2, bitcoin::Network::Regtest, false);
+        let mut wrong_action_signature = signer.clone();
+        wrong_action_signature.signature_hex =
+            signed_approval(&action_hex, 2, 2, bitcoin::Network::Regtest, false).signature_hex;
+
+        let error = approve_action(
+            &repo,
+            MOCK_MEMBERSHIP_URL,
+            bitcoin::Network::Regtest,
+            SessionContext {
+                authority: Authority::StrataAdmin,
+                signer_pubkey: &signer.signer_pubkey,
+            },
+            &created.action_id,
+            &wrong_action_signature,
+        )
+        .await
+        .expect_err("signature for a different canonical action is rejected");
+
+        assert!(matches!(error, AppError::BadRequest(_)));
+        let stored = repo
+            .find_by_action_id(&created.action_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_only_signature(&stored, &first);
+    }
+
+    #[tokio::test]
+    async fn approve_rechecks_current_authority_membership() {
+        let repo = new_repo();
+        let action_hex = test_fixture_action_hex();
+        let first = signed_approval(&action_hex, 1, 1, bitcoin::Network::Regtest, false);
+        let created = create_update_action(
+            &repo,
+            SessionContext {
+                authority: Authority::StrataAdmin,
+                signer_pubkey: &first.signer_pubkey,
+            },
+            1,
+            &action_hex,
+            &first,
+            2,
+            None,
+        )
+        .await
+        .unwrap();
+        let removed_signer = signed_approval(&action_hex, 1, 3, bitcoin::Network::Regtest, false);
+
+        let error = approve_action(
+            &repo,
+            MOCK_MEMBERSHIP_URL,
+            bitcoin::Network::Regtest,
+            SessionContext {
+                authority: Authority::StrataAdmin,
+                signer_pubkey: &removed_signer.signer_pubkey,
+            },
+            &created.action_id,
+            &removed_signer,
+        )
+        .await
+        .expect_err("a signer absent from the current authority is rejected");
+
+        assert!(matches!(error, AppError::Unauthorized));
+        let stored = repo
+            .find_by_action_id(&created.action_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_only_signature(&stored, &first);
+    }
+
+    #[tokio::test]
+    async fn approve_accepts_valid_client_signature_formats() {
+        for recoverable in [false, true] {
+            let repo = new_repo();
+            let action_hex = test_fixture_action_hex();
+            let first = signed_approval(&action_hex, 1, 1, bitcoin::Network::Regtest, false);
+            let created = create_update_action(
+                &repo,
+                SessionContext {
+                    authority: Authority::StrataAdmin,
+                    signer_pubkey: &first.signer_pubkey,
+                },
+                1,
+                &action_hex,
+                &first,
+                2,
+                None,
+            )
+            .await
+            .unwrap();
+            let signer = signed_approval(&action_hex, 1, 2, bitcoin::Network::Regtest, recoverable);
+            let mut submitted = signer.clone();
+            submitted.signer_pubkey = submitted.signer_pubkey.to_uppercase();
+
+            let updated = approve_action(
+                &repo,
+                MOCK_MEMBERSHIP_URL,
+                bitcoin::Network::Regtest,
+                SessionContext {
+                    authority: Authority::StrataAdmin,
+                    signer_pubkey: &signer.signer_pubkey,
+                },
+                &created.action_id,
+                &submitted,
+            )
+            .await
+            .expect("authenticated member's valid approval is stored");
+
+            assert_eq!(updated.signatures.len(), 2);
+            assert_eq!(updated.signatures[1].signer_pubkey, signer.signer_pubkey);
+            assert_eq!(updated.signatures[1].signature_hex, signer.signature_hex);
+        }
     }
 
     #[tokio::test]
@@ -2264,7 +2596,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        let updated = approve_action(&repo, session_b, &created.action_id, &sig_b())
+        let updated = persist_approval(&repo, session_b, &created.action_id, &sig_b())
             .await
             .unwrap();
 
@@ -2288,7 +2620,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(&repo, session_b.clone(), &created.action_id, &sig_b())
+        persist_approval(&repo, session_b.clone(), &created.action_id, &sig_b())
             .await
             .unwrap();
 
@@ -2341,7 +2673,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(&repo, session_b.clone(), &created.action_id, &sig_b())
+        persist_approval(&repo, session_b.clone(), &created.action_id, &sig_b())
             .await
             .unwrap();
 
@@ -2419,7 +2751,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(&repo, session_b, &created.action_id, &sig_b())
+        persist_approval(&repo, session_b, &created.action_id, &sig_b())
             .await
             .unwrap();
 
@@ -2479,7 +2811,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(&repo, session_b, &created.action_id, &sig_b())
+        persist_approval(&repo, session_b, &created.action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(
@@ -3008,7 +3340,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        let updated = approve_action(&repo, session_b, &created.action_id, &sig_b())
+        let updated = persist_approval(&repo, session_b, &created.action_id, &sig_b())
             .await
             .unwrap();
 
@@ -3034,7 +3366,7 @@ mod tests {
                 .to_string(),
             signature_hex: "different_sig".to_string(),
         };
-        let result = approve_action(&repo, session, &created.action_id, &dup_sig).await;
+        let result = persist_approval(&repo, session, &created.action_id, &dup_sig).await;
 
         assert!(matches!(result.unwrap_err(), AppError::Conflict(_)));
     }
@@ -3048,7 +3380,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_a().signer_pubkey,
         };
-        let result = approve_action(&repo, session, &fake_id, &sig_a()).await;
+        let result = persist_approval(&repo, session, &fake_id, &sig_a()).await;
 
         assert!(matches!(result.unwrap_err(), AppError::NotFound));
     }
@@ -3317,7 +3649,7 @@ mod tests {
             signer_pubkey: upper_pubkey,
             signature_hex: "other_sig".to_string(),
         };
-        let result = approve_action(&repo, session, &created.action_id, &second).await;
+        let result = persist_approval(&repo, session, &created.action_id, &second).await;
 
         assert!(matches!(result.unwrap_err(), AppError::Conflict(_)));
     }
@@ -3353,7 +3685,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(repo, session_b.clone(), &created.action_id, &sig_b())
+        persist_approval(repo, session_b.clone(), &created.action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(repo, session_b, "mock://asm-membership", &created.action_id)
@@ -3445,7 +3777,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(repo, session_b.clone(), &created.action_id, &sig_b())
+        persist_approval(repo, session_b.clone(), &created.action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(repo, session_b, "mock://asm-membership", &created.action_id)
@@ -3691,7 +4023,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(&repo, session_b.clone(), &cancel.action_id, &sig_b())
+        persist_approval(&repo, session_b.clone(), &cancel.action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(&repo, session_b, "mock://asm-membership", &cancel.action_id)
@@ -3772,7 +4104,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(&repo, session_b.clone(), &cancel.action_id, &sig_b())
+        persist_approval(&repo, session_b.clone(), &cancel.action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(&repo, session_b, "mock://asm-membership", &cancel.action_id)
@@ -3833,7 +4165,7 @@ mod tests {
             authority: Authority::StrataAdmin,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(&repo, session_b.clone(), &cancel.action_id, &sig_b())
+        persist_approval(&repo, session_b.clone(), &cancel.action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(
@@ -3946,7 +4278,7 @@ mod tests {
             authority,
             signer_pubkey: &sig_b().signer_pubkey,
         };
-        approve_action(repo, session_b.clone(), &created.action_id, &sig_b())
+        persist_approval(repo, session_b.clone(), &created.action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(repo, session_b, "mock://asm-membership", &created.action_id)
@@ -4242,8 +4574,8 @@ mod tests {
         };
 
         let (r1, r2) = tokio::join!(
-            approve_action(&*repo1, session1, &action_id1, &sig_b),
-            approve_action(&*repo2, session2, &action_id2, &dup_sig),
+            persist_approval(&*repo1, session1, &action_id1, &sig_b),
+            persist_approval(&*repo2, session2, &action_id2, &dup_sig),
         );
 
         let successes = [r1.is_ok(), r2.is_ok()].iter().filter(|&&ok| ok).count();
@@ -4348,7 +4680,7 @@ mod tests {
         .await
         .unwrap();
         let action_id = created.action_id;
-        approve_action(repo, session_of(&sig_b()), &action_id, &sig_b())
+        persist_approval(repo, session_of(&sig_b()), &action_id, &sig_b())
             .await
             .unwrap();
         transition_to_approved(
