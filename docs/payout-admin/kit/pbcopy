@@ -1,0 +1,11 @@
+#!/bin/bash
+# Copies standard input to the clipboard on macOS and Linux.
+if [[ $(uname -s) == Darwin ]]; then
+    exec /usr/bin/pbcopy
+fi
+
+if [[ -n ${WAYLAND_DISPLAY:-} ]]; then
+    exec wl-copy
+fi
+
+exec xclip -selection clipboard

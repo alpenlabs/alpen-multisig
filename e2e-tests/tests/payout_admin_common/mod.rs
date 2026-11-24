@@ -110,7 +110,7 @@ pub trait Funding {
     async fn claim(&self, outputs: Vec<TxOut>) -> Transaction;
 }
 
-struct WalletFunding<'a>(&'a Node);
+pub struct WalletFunding<'a>(pub &'a Node);
 
 impl Funding for WalletFunding<'_> {
     fn node(&self) -> &Node {
@@ -285,6 +285,24 @@ pub async fn acked_game_funded(
     deployment: &Deployment,
     n_of_n: &Keypair,
 ) -> (Game, Transaction) {
+    let (game, ack) = build_game_with_ack(funding, fixture, deployment, n_of_n).await;
+    call(
+        funding.node(),
+        "sendrawtransaction",
+        json!([serialize_hex(&ack)]),
+    )
+    .await;
+    funding.mine(1).await;
+
+    (game, ack)
+}
+
+pub async fn build_game_with_ack(
+    funding: &impl Funding,
+    fixture: &Fixture,
+    deployment: &Deployment,
+    n_of_n: &Keypair,
+) -> (Game, Transaction) {
     let node = funding.node();
     let old = claim_and_contest_funded(funding, fixture, deployment, n_of_n).await;
     funding.mine(1).await;
@@ -366,9 +384,6 @@ pub async fn acked_game_funded(
         counterproof_control_block.serialize(),
     ]);
     ack.input[1].witness = Witness::from_slice(&[key_signature.as_ref().to_vec()]);
-    call(node, "sendrawtransaction", json!([serialize_hex(&ack)])).await;
-    // Leave the ACK young so the caller can exercise the six-confirmation gate.
-    funding.mine(1).await;
 
     (old, ack)
 }
