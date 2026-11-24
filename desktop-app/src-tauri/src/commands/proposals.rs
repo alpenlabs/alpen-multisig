@@ -3,7 +3,6 @@ use desktop_app::application::orchestrator_auth;
 use desktop_app::application::orchestrator_client::{
     OrchestratorClient, OrchestratorError, ReportBroadcastProgressRequest,
 };
-use desktop_app::application::orchestrator_url::validate_orchestrator_base_url;
 use desktop_app::application::pending_reveals::PendingReveals;
 use desktop_app::application::proposals;
 use desktop_app::application::proposals::{BroadcastError, ProposalError};
@@ -274,10 +273,7 @@ fn map_proposal(proposal: Proposal) -> ProposalDto {
 }
 
 fn build_client(base_url: String) -> Result<HttpOrchestratorClient, String> {
-    validate_orchestrator_base_url(&base_url)?;
-    let session = orchestrator_auth::get_session()?
-        .ok_or_else(|| "no orchestrator session; authenticate first".to_string())?;
-    Ok(HttpOrchestratorClient::new(base_url).with_bearer_token(session.token))
+    orchestrator_auth::authenticated_client_for(&base_url)
 }
 
 #[cfg(test)]

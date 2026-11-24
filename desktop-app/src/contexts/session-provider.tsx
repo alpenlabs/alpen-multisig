@@ -81,7 +81,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 			if (currentSession.data.authority === expectedAuthority) {
 				return
 			}
-			await orchestratorAuthLogout(getOrchestratorBaseUrl())
+			await orchestratorAuthLogout()
 		}
 
 		try {
@@ -93,7 +93,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
 	const extendOrchestratorSession = useCallback(async () => {
 		try {
-			await orchestratorAuthLogout(getOrchestratorBaseUrl())
+			await orchestratorAuthLogout()
 			await signOrchestratorChallenge()
 		} finally {
 			setSigningStep(null)
@@ -160,7 +160,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 	const disconnectSession = useCallback(async () => {
 		setIsOrchestratorSessionActive(false)
 		setOrchestratorExpiresAtMs(null)
-		void (await orchestratorAuthLogout(getOrchestratorBaseUrl()))
+		void (await orchestratorAuthLogout())
 		await logout()
 		clearSession()
 	}, [clearSession, logout])

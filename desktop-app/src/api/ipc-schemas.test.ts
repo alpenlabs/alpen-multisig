@@ -145,12 +145,20 @@ const rawChallenge = rawOrchestratorAuthChallengeSchema.safeParse({
 assert.equal(rawChallenge.success, true)
 
 const rawSession = rawOrchestratorAuthSessionSchema.safeParse({
-	token: 'tok',
+	session_id: 'opaque-session-id',
 	authority: 'strata_admin',
 	signer_pubkey: '02aa',
 	expires_at_unix_ms: 9999,
 })
 assert.equal(rawSession.success, true)
+const rawSessionWithToken = rawOrchestratorAuthSessionSchema.safeParse({
+	session_id: 'opaque-session-id',
+	token: 'secret-token',
+	authority: 'strata_admin',
+	signer_pubkey: '02aa',
+	expires_at_unix_ms: 9999,
+})
+assert.equal(rawSessionWithToken.success, false)
 
 // asm-state schemas
 const config = multisigConfigSchema.safeParse({ signers: ['02aa', '02bb'], threshold: 2 })

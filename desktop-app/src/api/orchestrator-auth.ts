@@ -49,7 +49,7 @@ export type OrchestratorAuthChallenge = {
 }
 
 export type OrchestratorAuthSession = {
-	token: string
+	sessionId: string
 	authority: string
 	signerPubkey: string
 	expiresAtUnixMs: number
@@ -115,7 +115,7 @@ export function orchestratorAuthComplete(
 		return {
 			ok: true,
 			data: {
-				token: result.data.token,
+				sessionId: result.data.session_id,
 				authority: result.data.authority,
 				signerPubkey: result.data.signer_pubkey,
 				expiresAtUnixMs: result.data.expires_at_unix_ms,
@@ -124,8 +124,8 @@ export function orchestratorAuthComplete(
 	})
 }
 
-export function orchestratorAuthLogout(baseUrl: string): Promise<ApiResult<null>> {
-	return tauriCall('orchestrator_auth_logout', { baseUrl }, z.null())
+export function orchestratorAuthLogout(): Promise<ApiResult<null>> {
+	return tauriCall('orchestrator_auth_logout', undefined, z.null())
 }
 
 export function orchestratorAuthGetSession(): Promise<ApiResult<OrchestratorAuthSession | null>> {
@@ -140,7 +140,7 @@ export function orchestratorAuthGetSession(): Promise<ApiResult<OrchestratorAuth
 			return {
 				ok: true,
 				data: {
-					token: result.data.token,
+					sessionId: result.data.session_id,
 					authority: result.data.authority,
 					signerPubkey: result.data.signer_pubkey,
 					expiresAtUnixMs: result.data.expires_at_unix_ms,
