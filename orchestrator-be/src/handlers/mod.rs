@@ -151,13 +151,21 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
-    fn create_body(signer: &str) -> Value {
+    fn create_action_body(action_hex: &str, signer: &str, secret_key: &str) -> Value {
         json!({
             "seq_no": 1,
-            "action_hex": crate::infrastructure::action_codec::test_fixture_action_hex(),
+            "action_hex": action_hex,
             "signer_pubkey": signer,
-            "signature_hex": "sig_a"
+            "signature_hex": sign_action(action_hex, 1, secret_key)
         })
+    }
+
+    fn create_body() -> Value {
+        create_action_body(
+            &crate::infrastructure::action_codec::test_fixture_action_hex(),
+            SIGNER_A_PK,
+            SIGNER_A_SK,
+        )
     }
 
     fn sign_digest(secret_key_hex: &str, challenge_hex: &str) -> String {
@@ -168,6 +176,28 @@ mod tests {
         let msg = Message::from_digest_slice(&digest).unwrap();
         let sig = Secp256k1::new().sign_ecdsa(&msg, &sk);
         hex::encode(sig.serialize_compact())
+    }
+
+    fn sign_action(action_hex: &str, seq_no: u64, secret_key: &str) -> String {
+        use crate::infrastructure::action_codec::decode_multisig_action_hex;
+        use strata_asm_txs_admin::signing_message::SigningMessage;
+
+        let action = decode_multisig_action_hex(action_hex).unwrap();
+        let sighash = SigningMessage::for_action(&action, seq_no, bitcoin::Network::Regtest)
+            .compute_sighash();
+
+        sign_digest(secret_key, &hex::encode(sighash.0))
+    }
+
+    fn signer_b_approval(proposal: &Value) -> Value {
+        json!({
+            "signer_pubkey": signer_b_pk(),
+            "signature_hex": sign_action(
+                proposal["action_hex"].as_str().unwrap(),
+                proposal["seq_no"].as_u64().unwrap(),
+                SIGNER_B_SK
+            )
+        })
     }
 
     async fn login(app: Router, signer_sk: &str, signer_pk: &str) -> String {
@@ -301,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_proposal_requires_bearer() {
         let app = test_app();
-        let req = json_request("POST", "/proposals", Some(create_body(SIGNER_A_PK)), None);
+        let req = json_request("POST", "/proposals", Some(create_body()), None);
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
@@ -313,12 +343,7 @@ mod tests {
         let token = login(app.clone(), SIGNER_A_SK, SIGNER_A_PK).await;
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
-        let req = json_request(
-            "POST",
-            "/proposals",
-            Some(create_body(SIGNER_A_PK)),
-            Some(&token),
-        );
+        let req = json_request("POST", "/proposals", Some(create_body()), Some(&token));
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
@@ -330,12 +355,11 @@ mod tests {
         let app = test_app();
         let token = login(app.clone(), SIGNER_A_SK, SIGNER_A_PK).await;
 
-        let body = json!({
-            "seq_no": 1,
-            "action_hex": crate::infrastructure::action_codec::test_fixture_defcon_1_action_hex(),
-            "signer_pubkey": SIGNER_A_PK,
-            "signature_hex": "sig_a"
-        });
+        let body = create_action_body(
+            &crate::infrastructure::action_codec::test_fixture_defcon_1_action_hex(),
+            SIGNER_A_PK,
+            SIGNER_A_SK,
+        );
         let req = json_request("POST", "/proposals", Some(body), Some(&token));
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -352,12 +376,7 @@ mod tests {
         let app = test_app();
         let token = login(app.clone(), SIGNER_A_SK, SIGNER_A_PK).await;
 
-        let req = json_request(
-            "POST",
-            "/proposals",
-            Some(create_body(SIGNER_A_PK)),
-            Some(&token),
-        );
+        let req = json_request("POST", "/proposals", Some(create_body()), Some(&token));
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
         let created = response_json(resp).await;
@@ -382,12 +401,7 @@ mod tests {
         let token = login(app.clone(), SIGNER_A_SK, SIGNER_A_PK).await;
         let window_ms = EXPIRY_DAYS * 24 * 3600 * 1000;
 
-        let req = json_request(
-            "POST",
-            "/proposals",
-            Some(create_body(SIGNER_A_PK)),
-            Some(&token),
-        );
+        let req = json_request("POST", "/proposals", Some(create_body()), Some(&token));
         let created = response_json(app.clone().oneshot(req).await.unwrap()).await;
         let created_at = created["created_at"].as_i64().unwrap();
         assert_eq!(created["expires_at"].as_i64(), Some(created_at + window_ms));
@@ -417,7 +431,11 @@ mod tests {
         let req = json_request(
             "POST",
             "/proposals",
-            Some(create_body(&signer_b_pk())),
+            Some(create_action_body(
+                &crate::infrastructure::action_codec::test_fixture_action_hex(),
+                &signer_b_pk(),
+                SIGNER_B_SK,
+            )),
             Some(&token),
         );
         let resp = app.oneshot(req).await.unwrap();
@@ -499,12 +517,7 @@ mod tests {
         let signer_b = signer_b_pk();
         let token_b = login(app.clone(), SIGNER_B_SK, &signer_b).await;
 
-        let req = json_request(
-            "POST",
-            "/proposals",
-            Some(create_body(SIGNER_A_PK)),
-            Some(&token_a),
-        );
+        let req = json_request("POST", "/proposals", Some(create_body()), Some(&token_a));
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
         let created = response_json(resp).await;
@@ -513,10 +526,7 @@ mod tests {
         let req = json_request(
             "POST",
             &format!("/proposals/{action_id}/approve"),
-            Some(json!({
-                "signer_pubkey": signer_b,
-                "signature_hex": "sig_b"
-            })),
+            Some(signer_b_approval(&created)),
             Some(&token_b),
         );
         let resp = app.clone().oneshot(req).await.unwrap();
@@ -552,12 +562,7 @@ mod tests {
         let app = test_app();
         let token = login(app.clone(), SIGNER_A_SK, SIGNER_A_PK).await;
 
-        let req = json_request(
-            "POST",
-            "/proposals",
-            Some(create_body(SIGNER_A_PK)),
-            Some(&token),
-        );
+        let req = json_request("POST", "/proposals", Some(create_body()), Some(&token));
         let resp = app.clone().oneshot(req).await.unwrap();
         let created = response_json(resp).await;
         let action_id = created["action_id"].as_str().unwrap();
@@ -576,12 +581,7 @@ mod tests {
     async fn test_approve_with_invalid_token_rejected() {
         let app = test_app();
         let token = login(app.clone(), SIGNER_A_SK, SIGNER_A_PK).await;
-        let req = json_request(
-            "POST",
-            "/proposals",
-            Some(create_body(SIGNER_A_PK)),
-            Some(&token),
-        );
+        let req = json_request("POST", "/proposals", Some(create_body()), Some(&token));
         let resp = app.clone().oneshot(req).await.unwrap();
         let created = response_json(resp).await;
         let action_id = created["action_id"].as_str().unwrap();
@@ -612,16 +612,14 @@ mod tests {
             .oneshot(json_request(
                 "POST",
                 "/proposals",
-                Some(create_body(SIGNER_A_PK)),
+                Some(create_body()),
                 Some(&token_a),
             ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
-        let action_id = response_json(resp).await["action_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let created = response_json(resp).await;
+        let action_id = created["action_id"].as_str().unwrap();
 
         // Signer B approves → quorum reached, still pending
         let resp = app
@@ -629,7 +627,7 @@ mod tests {
             .oneshot(json_request(
                 "POST",
                 &format!("/proposals/{action_id}/approve"),
-                Some(json!({ "signer_pubkey": signer_b, "signature_hex": "sig_b" })),
+                Some(signer_b_approval(&created)),
                 Some(&token_b),
             ))
             .await
@@ -662,23 +660,21 @@ mod tests {
             .oneshot(json_request(
                 "POST",
                 "/proposals",
-                Some(create_body(SIGNER_A_PK)),
+                Some(create_body()),
                 Some(&token_a),
             ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
-        let action_id = response_json(resp).await["action_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let created = response_json(resp).await;
+        let action_id = created["action_id"].as_str().unwrap();
 
         // Reach quorum
         app.clone()
             .oneshot(json_request(
                 "POST",
                 &format!("/proposals/{action_id}/approve"),
-                Some(json!({ "signer_pubkey": signer_b, "signature_hex": "sig_b" })),
+                Some(signer_b_approval(&created)),
                 Some(&token_b),
             ))
             .await
@@ -752,20 +748,18 @@ mod tests {
             .oneshot(json_request(
                 "POST",
                 "/proposals",
-                Some(create_body(SIGNER_A_PK)),
+                Some(create_body()),
                 Some(&token_a),
             ))
             .await
             .unwrap();
-        let action_id = response_json(resp).await["action_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let created = response_json(resp).await;
+        let action_id = created["action_id"].as_str().unwrap();
         app.clone()
             .oneshot(json_request(
                 "POST",
                 &format!("/proposals/{action_id}/approve"),
-                Some(json!({ "signer_pubkey": signer_b, "signature_hex": "sig_b" })),
+                Some(signer_b_approval(&created)),
                 Some(&token_b),
             ))
             .await
@@ -869,7 +863,7 @@ mod tests {
             .oneshot(json_request(
                 "POST",
                 "/proposals",
-                Some(create_body(SIGNER_A_PK)),
+                Some(create_body()),
                 None,
             ))
             .await

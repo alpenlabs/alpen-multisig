@@ -296,7 +296,7 @@ mod proposal_lifecycle {
 
         let server = TestServer::start(&db_url).await;
         let pool = sqlx::PgPool::connect(&db_url).await.expect("db connect");
-        let (sk_a, pk_a) = keypair(11);
+        let (sk_a, pk_a) = keypair(1);
         let client_a = auth_client(&server.base_url, &sk_a, &pk_a, "strata_admin").await;
 
         let action_hex = action_codec::encode_hex(&demo_action()).expect("encode");
@@ -344,7 +344,7 @@ mod proposal_lifecycle {
 
         let server = TestServer::start(&db_url).await;
         let pool = sqlx::PgPool::connect(&db_url).await.expect("db connect");
-        let (sk_a, pk_a) = keypair(41);
+        let (sk_a, pk_a) = keypair(1);
         let client_a = auth_client(&server.base_url, &sk_a, &pk_a, "strata_admin").await;
 
         let action_hex = action_codec::encode_hex(&demo_action()).expect("encode");
@@ -387,7 +387,7 @@ mod proposal_lifecycle {
         };
 
         let server = TestServer::start(&db_url).await;
-        let (sk_a, pk_a) = keypair(51);
+        let (sk_a, pk_a) = keypair(1);
         let client_a = auth_client(&server.base_url, &sk_a, &pk_a, "strata_admin").await;
 
         let action_hex = action_codec::encode_hex(&demo_action()).expect("encode");
@@ -423,7 +423,7 @@ mod proposal_lifecycle {
         };
 
         let server = TestServer::start(&db_url).await;
-        let (sk_a, pk_a) = keypair(61);
+        let (sk_a, pk_a) = keypair(1);
         let client_a = auth_client(&server.base_url, &sk_a, &pk_a, "strata_admin").await;
 
         let action_hex = action_codec::encode_hex(&demo_action()).expect("encode");
