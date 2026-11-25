@@ -8,6 +8,7 @@ import {
 	getOrchestratorBaseUrl,
 } from '@/api/orchestrator-auth'
 import { walletSessionInit, walletSessionInitWatchOnly } from '@/api/admin-wallet'
+import { payoutSignOut } from '@/api/payout-admin'
 import { SessionContext, type SigningStepInfo } from '@/contexts/session-context'
 import { initAdminWalletForAdapter } from '@/contexts/session-provider-vendor-branch'
 import { useAuthSession } from '@/hooks/use-auth-session'
@@ -161,6 +162,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 		setIsOrchestratorSessionActive(false)
 		setOrchestratorExpiresAtMs(null)
 		void (await orchestratorAuthLogout())
+		void (await payoutSignOut())
 		await logout()
 		clearSession()
 	}, [clearSession, logout])

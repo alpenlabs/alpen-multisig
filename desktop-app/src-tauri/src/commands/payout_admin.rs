@@ -16,6 +16,7 @@ commands! {
     payout_admin_show_key() -> Value => ledger_identity(true);
     payout_admin_sign_in_review(coordinator_url: String) -> Value => sign_in_review(coordinator_url);
     payout_admin_sign_in(review_id: String) -> Value => sign_in(review_id);
+    payout_admin_sign_out() -> () => sign_out();
     payout_admin_overview() -> Value => pending_and_past();
     payout_admin_review_pending(txid: String) -> Value => review_block_payouts_tx(None, Some(txid));
     payout_admin_sign_pending(review_id: String) -> wire::PasteSignaturesView => sign_block_payouts_tx(review_id, false);
