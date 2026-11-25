@@ -1,0 +1,7 @@
+network = "regtest"
+daemon_rpc_addr = "127.0.0.1:18500"
+daemon_p2p_addr = "127.0.0.1:18504"
+auth = "user:password"
+db_dir = "/tmp/payout-test/electrs"
+electrum_rpc_addr = "127.0.0.1:18501"
+log_filters = "INFO"

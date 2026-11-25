@@ -1,0 +1,11 @@
+#!/bin/bash
+# Prints the clipboard on macOS and Linux.
+if [[ $(uname -s) == Darwin ]]; then
+    exec /usr/bin/pbpaste
+fi
+
+if [[ -n ${WAYLAND_DISPLAY:-} ]]; then
+    exec wl-paste --no-newline
+fi
+
+exec xclip -selection clipboard -o

@@ -4,7 +4,7 @@
 cargo-features = ["trim-paths"]
 
 [workspace]
-members = ['orchestrator-be', 'desktop-app/src-tauri', 'e2e-tests', 'regtest-dev-api']
+members = ['orchestrator-be', 'desktop-app/src-tauri', 'e2e-tests', 'regtest-dev-api', 'payout-admin-core']
 resolver = '2'
 
 [workspace.dependencies]
@@ -27,6 +27,16 @@ strata-identifiers = { git = "https://github.com/alpenlabs/strata-common", tag =
 strata-predicate = { git = "https://github.com/alpenlabs/strata-common", tag = "v0.4.0" }
 strata-l1-txfmt = { git = "https://github.com/alpenlabs/strata-common", tag = "v0.4.0" }
 strata-l1-envelope-fmt = { git = "https://github.com/alpenlabs/strata-common", tag = "v0.4.0" }
+
+# From alpenlabs/strata-bridge `main` after PR #948 ("Tweaked N/N Internal Key") merged. The Payout
+# Administrator builds and checks the claim admin payout connector with the bridge's own code, so the
+# connector bytes match the bridge's exactly.
+strata-bridge-common = { git = "https://github.com/alpenlabs/strata-bridge", rev = "dc926c422b4aa46b38361ee81346f3ed7d8194a8" }
+strata-bridge-connectors = { git = "https://github.com/alpenlabs/strata-bridge", rev = "dc926c422b4aa46b38361ee81346f3ed7d8194a8" }
+strata-bridge-primitives = { git = "https://github.com/alpenlabs/strata-bridge", rev = "dc926c422b4aa46b38361ee81346f3ed7d8194a8", default-features = false }
+strata-bridge-key-deriv = { git = "https://github.com/alpenlabs/strata-bridge", rev = "dc926c422b4aa46b38361ee81346f3ed7d8194a8" }
+strata-bridge-tx-graph = { git = "https://github.com/alpenlabs/strata-bridge", rev = "dc926c422b4aa46b38361ee81346f3ed7d8194a8" }
+payout-admin-core = { path = "payout-admin-core" }
 
 # SSZ serialization (replaces Borsh for admin tx wire format after upstream PR alpenlabs/asm#8)
 ssz = { git = "https://github.com/alpenlabs/ssz-gen", tag = "v0.17.0" }

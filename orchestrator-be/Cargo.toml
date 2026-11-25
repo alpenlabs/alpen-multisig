@@ -16,6 +16,8 @@ path = "src/main.rs"
 dev-mocks = []
 
 [dependencies]
+bdk_electrum = { workspace = true }
+payout-admin-core = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 serde = { workspace = true }
@@ -50,6 +52,7 @@ strata-l1-txfmt = { workspace = true }
 strata-l1-envelope-fmt = { workspace = true }
 
 [dev-dependencies]
+payout-admin-core = { workspace = true, features = ["test-support"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 # Test-only: building a `SafeHarborAddress` fixture needs the constructor, while production only

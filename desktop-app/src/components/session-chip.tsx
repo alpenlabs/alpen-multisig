@@ -6,7 +6,7 @@ import {
 } from '@/assets/icons'
 
 export type SessionChipProps = {
-	timeLabel: string
+	timeLabel?: string
 	signerLabel: string
 	warning: boolean
 	/** When provided, the chip renders as a button that opens the wallet panel. */
@@ -27,13 +27,17 @@ export function SessionChip({ timeLabel, signerLabel, warning, onActivate, isAct
 
 	const content = (
 		<>
-			{warning ? (
-				<ClockSessionWarningIcon width={12} height={12} className="block shrink-0" />
-			) : (
-				<ClockSessionDefaultIcon width={12} height={12} className="block shrink-0" />
+			{timeLabel !== undefined && (
+				<>
+					{warning ? (
+						<ClockSessionWarningIcon width={12} height={12} className="block shrink-0" />
+					) : (
+						<ClockSessionDefaultIcon width={12} height={12} className="block shrink-0" />
+					)}
+					<span className="font-mono text-mono-sm font-medium">Session · {timeLabel}</span>
+					<span className="h-3 w-px bg-[#e5e7eb]" aria-hidden="true" />
+				</>
 			)}
-			<span className="font-mono text-mono-sm font-medium">Session · {timeLabel}</span>
-			<span className="h-3 w-px bg-[#e5e7eb]" aria-hidden="true" />
 			{warning ? (
 				<UsbSessionWarningIcon width={12} height={12} className="block shrink-0" />
 			) : (

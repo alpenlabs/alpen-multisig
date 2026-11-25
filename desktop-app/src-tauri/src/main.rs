@@ -6,6 +6,12 @@ use tauri::Manager;
 
 fn main() {
     desktop_app::infrastructure::env_loader::load_dotenv_files();
+    // On macOS, hidapi ties its device watcher to the run loop of the thread that first opens it
+    // and keeps it for the life of the process. Ledger calls run on Tokio blocking threads, which
+    // exit when idle; a watcher left on such a thread crashes the next USB access. Opening hidapi
+    // here ties it to the main thread, which lives as long as the app.
+    #[cfg(target_os = "macos")]
+    let _ = ledger_transport_hid::hidapi::HidApi::new();
     let pending_reveals =
         desktop_app::infrastructure::pending_reveals_store::new_with_persistence();
     commands::invoke::attach_invoke_handlers(tauri::Builder::default())
@@ -45,6 +51,13 @@ fn main() {
                     .inner()
                     .clone(),
                 Arc::clone(&node_config_arc),
+            );
+            app.manage(
+                desktop_app::application::payout_admin::PayoutAdminState::new(
+                    node_config_arc.clone(),
+                    wallet_session.clone(),
+                    app.path().app_data_dir().ok(),
+                ),
             );
             app.manage(NodeConfigState(node_config_arc));
             app.manage(wallet_session);

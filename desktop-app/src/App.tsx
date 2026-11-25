@@ -14,7 +14,7 @@ import { ProposalDetailScreen } from '@/screens/proposal-detail-screen'
 import { CreateProposalScreen } from '@/screens/create-proposal-screen'
 import { SignScreen } from '@/screens/sign-screen'
 import { WalletConnectScreen } from '@/screens/wallet-connect-screen'
-import { BlockPayoutsScreen } from '@/screens/block-payouts-screen'
+import { PayoutAdminScreen } from '@/screens/payout-admin-screen'
 import { ManualProposalScreen } from '@/screens/manual-proposal-screen'
 import { SessionExpiryModal } from '@/components/session-expiry-modal'
 
@@ -130,7 +130,7 @@ const router = createBrowserRouter([
 				),
 			},
 			{ path: '/manual', element: <ManualProposalScreen /> },
-			{ path: '/block-payouts', element: <BlockPayoutsScreen /> },
+			{ path: '/payout-admin', element: <PayoutAdminScreen /> },
 			{ path: '*', element: <Navigate to="/" replace /> },
 		],
 	},

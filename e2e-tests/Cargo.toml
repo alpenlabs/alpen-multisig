@@ -35,6 +35,9 @@ strata-tasks = { git = "https://github.com/alpenlabs/strata-common", tag = "v0.4
 
 # Desktop app (application layer)
 desktop-app = { path = "../desktop-app/src-tauri" }
+strata-bridge-connectors = { workspace = true }
+musig2 = { git = "https://github.com/alpenlabs/musig2", branch = "fix/deserialization-mismatch" }
+secp = { version = "0.3", default-features = false, features = ["secp256k1"] }
 
 # Third-party
 anyhow = "1"
@@ -49,3 +52,18 @@ tokio.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"] }
+
+payout-admin-core = { workspace = true }
+
+[dev-dependencies]
+payout-admin-core = { workspace = true, features = ["test-support"] }
+
+# The regtest bridge needs the public test fixtures. Keep them behind a feature so a workspace
+# build does not compile them into the server and the app.
+[features]
+regtest-kit = ["payout-admin-core/test-support"]
+
+[[bin]]
+name = "regtest-bridge"
+path = "src/bin/regtest-bridge.rs"
+required-features = ["regtest-kit"]
