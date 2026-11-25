@@ -5915,9 +5915,14 @@ mod tests {
                     .port()
             };
             let (rpc_port, p2p_port) = (free_port(), free_port());
+            // Tests run in parallel and can read the same timestamp; the counter keeps each
+            // node's datadir apart (two nodes on one datadir fail to start).
+            static NEXT_DATADIR: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
             let datadir = std::env::temp_dir().join(format!(
-                "orchestrator-605-{}",
-                Utc::now().timestamp_nanos_opt().unwrap_or_default()
+                "orchestrator-605-{}-{}",
+                Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+                NEXT_DATADIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ));
             std::fs::create_dir_all(&datadir).unwrap();
             let child = std::process::Command::new("bitcoind")
