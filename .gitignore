@@ -19,6 +19,7 @@ dist/
 /desktop-app/src-tauri/.env
 /desktop-app/.env
 /desktop-app/.env.**
+/staging/.env
 
 # Claude settings
 /.claude/settings.local.json
