@@ -8,6 +8,7 @@ import {
 	getOrchestratorBaseUrl,
 } from '@/api/orchestrator-auth'
 import { walletSessionInit, walletSessionInitWatchOnly } from '@/api/admin-wallet'
+import { payoutSignOut } from '@/api/payout-admin'
 import { SessionContext, type SigningStepInfo } from '@/contexts/session-context'
 import { initAdminWalletForAdapter } from '@/contexts/session-provider-vendor-branch'
 import { useAuthSession } from '@/hooks/use-auth-session'
@@ -81,7 +82,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 			if (currentSession.data.authority === expectedAuthority) {
 				return
 			}
-			await orchestratorAuthLogout(getOrchestratorBaseUrl())
+			await orchestratorAuthLogout()
 		}
 
 		try {
@@ -93,7 +94,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
 	const extendOrchestratorSession = useCallback(async () => {
 		try {
-			await orchestratorAuthLogout(getOrchestratorBaseUrl())
+			await orchestratorAuthLogout()
 			await signOrchestratorChallenge()
 		} finally {
 			setSigningStep(null)
@@ -160,7 +161,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 	const disconnectSession = useCallback(async () => {
 		setIsOrchestratorSessionActive(false)
 		setOrchestratorExpiresAtMs(null)
-		void (await orchestratorAuthLogout(getOrchestratorBaseUrl()))
+		void (await orchestratorAuthLogout())
+		void (await payoutSignOut())
 		await logout()
 		clearSession()
 	}, [clearSession, logout])

@@ -400,9 +400,24 @@ impl PayoutAdminState {
             json!({"adminKey":session.admin_key,"expiresAtUnixSeconds":wire::unix_seconds::seconds(session.expires_at).map_err(|error| error.to_string())?}),
         )
     }
+
+    /// Forgets the coordinator session token, open reviews, verified claims, and the last bundle.
+    /// The coordinator has no logout route, so its token stays valid there until it expires.
+    pub async fn sign_out(&self) -> Result<(), String> {
+        self.inner.lock().await.sign_out();
+
+        Ok(())
+    }
 }
 
 impl SessionState {
+    fn sign_out(&mut self) {
+        self.coordinator = None;
+        self.open_reviews.clear();
+        self.ready_for_bundling = None;
+        self.last_bundle = None;
+    }
+
     fn checked_deployment_and_identity(&self) -> Result<(&Deployment, Identity), String> {
         let deployment = self.deployment.as_ref().ok_or("Load deployment first")?;
         let mut identity = self.identity.clone().ok_or("Read Ledger identity first")?;
@@ -1892,6 +1907,45 @@ mod tests {
         );
         assert!(inner.take_review(expired).is_err());
         assert!(inner.open_reviews.is_empty());
+    }
+
+    #[test]
+    fn sign_out_forgets_coordinator_token_and_reviews() {
+        let coordinator = Coordinator {
+            url: "http://localhost".parse().unwrap(),
+            session: Some(Session {
+                token: [7; 32],
+                expires: SystemTime::now()
+                    .checked_add(Duration::from_secs(60))
+                    .unwrap(),
+            }),
+        };
+        let mut inner = SessionState {
+            coordinator: Some(coordinator.clone()),
+            ..SessionState::default()
+        };
+        inner.open_reviews.insert(
+            ReviewId::new(),
+            Review {
+                expires: Deadline::Transaction(Instant::now()),
+                payload: Payload::SignIn(
+                    coordinator,
+                    wire::ChallengeResponse {
+                        nonce: "nonce".into(),
+                        expires_at: SystemTime::UNIX_EPOCH,
+                    },
+                ),
+            },
+        );
+        inner.ready_for_bundling = Some((VerificationId::new(), Vec::new()));
+        inner.last_bundle = Some((BundleId::new(), HashMap::new()));
+
+        inner.sign_out();
+
+        assert!(inner.signed_in_coordinator().is_err());
+        assert!(inner.open_reviews.is_empty());
+        assert!(inner.ready_for_bundling.is_none());
+        assert!(inner.last_bundle.is_none());
     }
 
     #[test]

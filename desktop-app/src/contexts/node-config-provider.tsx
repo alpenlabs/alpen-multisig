@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import { checkLocalNode, getNodeConfig, saveNodeConfig } from '@/api/node-config'
-import { orchestratorOverrideFromConfig, setOrchestratorBaseUrlOverride } from '@/api/orchestrator-auth'
+import {
+	getOrchestratorBaseUrl,
+	orchestratorAuthLogout,
+	orchestratorOverrideFromConfig,
+	resolveOrchestratorBaseUrl,
+	setOrchestratorBaseUrlOverride,
+} from '@/api/orchestrator-auth'
 import { NodeConfigContext } from '@/contexts/node-config-context'
 import type { LocalNodeStatus, NodeConfig } from '@/domain/node-config/model/node-config.types'
 
@@ -42,6 +48,11 @@ export function NodeConfigProvider({ children }: { children: ReactNode }) {
 		setIsSaving(true)
 		const result = await saveNodeConfig(draft)
 		if (result.ok) {
+			if (resolveOrchestratorBaseUrl(draft) !== getOrchestratorBaseUrl()) {
+				// The native logout resolves its destination from the stored issuing URL and clears
+				// credentials even when that orchestrator is unavailable.
+				await orchestratorAuthLogout()
+			}
 			setConfig(draft)
 			setOrchestratorBaseUrlOverride(orchestratorOverrideFromConfig(draft))
 			const statusResult = await checkLocalNode(draft)

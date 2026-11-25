@@ -1,6 +1,6 @@
 /** Binding Tauri command contract (camelCase arguments and responses):
  * payout_admin_identity, payout_admin_show_key, payout_admin_load_deployment,
- * payout_admin_sign_in_review, payout_admin_sign_in, payout_admin_overview,
+ * payout_admin_sign_in_review, payout_admin_sign_in, payout_admin_sign_out, payout_admin_overview,
  * payout_admin_review_pending, payout_admin_sign_pending, payout_admin_copy_signatures,
  * payout_admin_paste_signatures, payout_admin_import_psbt, payout_admin_export_psbt,
  * payout_admin_retry_broadcast, payout_admin_rebroadcast, payout_admin_verify_reports,
@@ -161,6 +161,10 @@ export function payoutSignInReview(coordinatorUrl: string): Promise<ApiResult<Pa
 
 export function payoutSignIn(reviewId: string): Promise<ApiResult<PayoutSession>> {
 	return tauriCall('payout_admin_sign_in', { reviewId }, sessionSchema)
+}
+
+export function payoutSignOut(): Promise<ApiResult<null>> {
+	return tauriCall('payout_admin_sign_out', {}, z.null())
 }
 
 export function payoutOverview(): Promise<ApiResult<PayoutOverview>> {

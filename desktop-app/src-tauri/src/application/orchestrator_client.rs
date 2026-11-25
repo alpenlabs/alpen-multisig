@@ -66,7 +66,9 @@ pub struct CompleteOrchestratorAuthRequest {
     pub signature_format: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Credential response returned by the orchestrator. This type stays inside the Rust process;
+/// renderer-facing commands return `OrchestratorAuthSessionView` instead.
+#[derive(Debug, Clone, Deserialize)]
 pub struct OrchestratorAuthSession {
     pub token: String,
     pub authority: String,

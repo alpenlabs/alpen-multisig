@@ -186,12 +186,14 @@ export const rawOrchestratorAuthChallengeSchema = z.object({
 	challenge_message: z.string(),
 })
 
-export const rawOrchestratorAuthSessionSchema = z.object({
-	token: z.string(),
-	authority: z.string(),
-	signer_pubkey: z.string(),
-	expires_at_unix_ms: z.number(),
-})
+export const rawOrchestratorAuthSessionSchema = z
+	.object({
+		session_id: z.string(),
+		authority: z.string(),
+		signer_pubkey: z.string(),
+		expires_at_unix_ms: z.number(),
+	})
+	.strict()
 
 // admin-id.ts schemas
 /** Admin ID per signer key (lowercase hex, no `0x`); keys that are not valid compressed keys are absent. */

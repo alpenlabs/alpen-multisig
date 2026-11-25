@@ -175,6 +175,7 @@ export function usePayoutAdmin() {
 		closeModal,
 		// Signs out and forgets the loaded payout admin files. The Ledger identity stays: no setting changes it.
 		reset: () => {
+			void api.payoutSignOut()
 			clearSession()
 			setDeployment(null)
 			setDeploymentError(null)
