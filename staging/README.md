@@ -32,12 +32,29 @@ sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 git clone <repo-url> alpen-multisig
 cd alpen-multisig
 
+# Revoke and rotate the previously exposed database credential before deployment.
+# Provision a dedicated role that is not the Neon project owner, with only the
+# staging schema, migration, and application permissions it needs. Export its URL from the
+# approved secret manager. For an interactive deployment, read it without saving
+# it in shell history or a repository file:
+export DATABASE_URL
+read -rsp "Rotated staging DATABASE_URL: " DATABASE_URL
+printf '\n'
+
 # Build and start all services (first build takes ~10 min)
 docker compose -f staging/docker-compose.yml up -d --build
+unset DATABASE_URL
 
 # Follow logs
 docker compose -f staging/docker-compose.yml logs -f
 ```
+
+The staging orchestrator refuses to start without `DATABASE_URL`; never store the value in the
+repository (including `staging/.env`). Audit the database provider's access logs for use of the
+exposed owner account, and restrict database network access to the EC2 host's IP (Neon IP allowlist).
+
+If `up` runs without `DATABASE_URL` exported (for example via `sudo`, which drops the environment),
+compose still exits 0 but the orchestrator restarts in a loop. Check `docker compose ps` or the logs.
 
 On first start, `bitcoin` mines 101 regtest blocks and writes `asm-params.json`.
 Subsequent restarts skip this step (flag file in the Docker volume).
@@ -46,7 +63,10 @@ Subsequent restarts skip this step (flag file in the Docker volume).
 
 ```bash
 git pull
+
+# Export the rotated least-privilege URL from the approved secret manager first.
 docker compose -f staging/docker-compose.yml up -d --build
+unset DATABASE_URL
 ```
 
 ## Useful commands
