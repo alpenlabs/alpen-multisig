@@ -58,10 +58,11 @@ export function ProposalDetailScreen() {
 	async function handlePasteSignatures(sigs: PastedSignature[], broadcastState: ImportBroadcastState) {
 		if (!actionId || !proposal) return
 		setImportNotice(null)
+		const notices: string[] = []
 		for (const sig of sigs) {
 			const res = await approveProposal({ baseUrl: getOrchestratorBaseUrl(), actionId, ...sig })
 			if (!res.ok) {
-				console.warn(`Failed to import signature for ${sig.signerPubkey}: ${res.error}`)
+				notices.push(`Failed to import signature for ${sig.signerPubkey}: ${res.error}`)
 			}
 		}
 		const hasNewBroadcastData =
@@ -81,7 +82,7 @@ export function ProposalDetailScreen() {
 			// A pair the row does not track is ignored with a 200 (#605): say so rather than let the
 			// import look applied.
 			if (synced.ok && importedPairIgnored(broadcastState.revealTxid, synced.data.revealTxid)) {
-				setImportNotice(IMPORTED_PAIR_IGNORED_NOTICE)
+				notices.push(IMPORTED_PAIR_IGNORED_NOTICE)
 			}
 			// If reveal is confirmed, attempt enacted transition in a separate call.
 			// Backend validates against ASM — 409 means not yet confirmed; non-fatal,
@@ -99,6 +100,7 @@ export function ProposalDetailScreen() {
 				})
 			}
 		}
+		setImportNotice(notices.join('\n') || null)
 		reload()
 	}
 
@@ -153,7 +155,7 @@ export function ProposalDetailScreen() {
 							className="mb-3 rounded-xl border border-[#e5e7eb] bg-[#f9fafb] px-4 py-3"
 							data-testid="e2e-detail-import-notice"
 						>
-							<p className="m-0 text-body text-[#111827]">{importNotice}</p>
+							<p className="m-0 whitespace-pre-line text-body text-[#111827]">{importNotice}</p>
 						</div>
 					)}
 
