@@ -97,7 +97,10 @@ export const proposalSchema = z
 			),
 		),
 	})
-	.transform((p) => ({ ...p, kind: p.targetActionId !== null ? ('cancel' as const) : ('update' as const) }))
+	.transform((p) => ({
+		...p,
+		kind: p.targetActionId !== null && p.actionType === 'cancel' ? ('cancel' as const) : ('update' as const),
+	}))
 
 export const authRoleSchema = z.nativeEnum(AuthRole)
 

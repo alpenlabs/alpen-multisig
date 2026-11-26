@@ -10,7 +10,7 @@ import {
 	getNextSeqNo,
 	type Proposal,
 } from '@/api/proposals'
-import { computeSighash } from '@/api/signing'
+import { computeSighash, decodeActionHex } from '@/api/signing'
 import { ShieldAccentIcon } from '@/assets/icons'
 import { authorityDisplayName, authorityLabelForRole } from '@/lib/authority-label'
 import { deviceCopy } from '@/lib/device-copy'
@@ -25,6 +25,13 @@ import type { SignSighashResult } from '@/wallet/types'
 import { useWalletPanelData } from '@/domain/admin-wallet/hooks/use-wallet-panel-data'
 import { WalletSessionControl } from '@/domain/admin-wallet/components/wallet-session-control'
 import { useSessionAdminId } from '@/domain/admin-wallet/hooks/use-session-admin-id'
+import { cancelMatchesProposal } from '@/domain/cancel-proposal/model/cancel-matches-proposal'
+
+async function cancelQueueId(actionHex: string): Promise<number | 'unknown'> {
+	const decoded = await decodeActionHex(actionHex.replace(/^0x/i, ''))
+
+	return decoded.ok && decoded.data.kind === 'cancel' ? decoded.data.targetUpdateId : 'unknown'
+}
 
 type Flow = 'initiate' | 'approve'
 
@@ -107,7 +114,21 @@ export function CancelProposalSignScreen() {
 					if (!cancelRes.ok) throw new Error(cancelRes.error)
 					const cancelProp = cancelRes.data
 
-					const sighashRes = await computeSighash(cancelProp.seqNo, cancelProp.actionHex)
+					const expected = await buildCancelActionHex(parent.actionHex)
+
+					if (!expected.ok) throw new Error(expected.error)
+
+					if (!cancelMatchesProposal(cancelProp, actionId, expected.data.actionHex)) {
+						const [expectedId, storedId] = await Promise.all([
+							cancelQueueId(expected.data.actionHex),
+							cancelQueueId(cancelProp.actionHex),
+						])
+						throw new Error(
+							`The stored cancel does not match the proposal it claims to cancel. Expected queue id ${expectedId}, stored queue id ${storedId}.`,
+						)
+					}
+
+					const sighashRes = await computeSighash(cancelProp.seqNo, expected.data.actionHex)
 					if (!sighashRes.ok) throw new Error(sighashRes.error)
 
 					const signed =
@@ -115,7 +136,7 @@ export function CancelProposalSignScreen() {
 
 					if (mounted) {
 						setFlow('approve')
-						setCancelActionHex(cancelProp.actionHex)
+						setCancelActionHex(expected.data.actionHex)
 						setCancelSeqNo(cancelProp.seqNo)
 						setCancelActionId(cancelProp.actionId)
 						setSighashHex(sighashRes.data.sighashHex)

@@ -183,9 +183,17 @@ pub struct BroadcastResultDto {
 }
 
 fn action_type_from_hex(target_action_id: &Option<String>, action_hex: &str) -> String {
-    if target_action_id.is_some() {
+    if matches!(
+        desktop_app::infrastructure::action_codec::decode_cancel_target_hex(action_hex),
+        Ok(Some(_))
+    ) {
         return "cancel".to_string();
     }
+
+    if target_action_id.is_some() {
+        return "unknown".to_string();
+    }
+
     let hex = action_hex.strip_prefix("0x").unwrap_or(action_hex);
     match desktop_app::infrastructure::action_codec::decode_hex(hex) {
         // A council rotation is the one multisig update whose target authority is not the
@@ -1426,12 +1434,23 @@ mod tests {
         }
     }
 
-    /// A cancel is identified by its target, never by decoding its own payload.
     #[test]
-    fn action_type_from_hex_prefers_the_cancel_target() {
-        assert_eq!(
-            action_type_from_hex(&Some("target".to_string()), "not-valid-hex"),
-            "cancel"
-        );
+    fn action_type_from_hex_requires_cancel_bytes_for_a_cancel_record() {
+        let target = Some("target".to_string());
+        let update_hex = encode_hex(&Action::Defcon3).unwrap();
+        assert_eq!(action_type_from_hex(&target, "not-valid-hex"), "unknown");
+        assert_eq!(action_type_from_hex(&target, &update_hex), "unknown");
+    }
+
+    #[test]
+    fn action_type_from_hex_recognizes_cancel_bytes_with_or_without_metadata() {
+        use desktop_app::infrastructure::action_codec::encode_cancel_hex_for_target;
+
+        let update_hex = encode_hex(&Action::Defcon3).unwrap();
+        let cancel_hex = encode_cancel_hex_for_target(&update_hex, 7).unwrap();
+
+        for target in [None, Some("target".to_string())] {
+            assert_eq!(action_type_from_hex(&target, &cancel_hex), "cancel");
+        }
     }
 }

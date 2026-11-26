@@ -93,6 +93,18 @@ pub(crate) fn test_fixture_defcon_3_action_hex() -> String {
 }
 
 #[cfg(test)]
+pub(crate) fn cancel_action_hex(target_hex: &str, queue_id: u32) -> String {
+    use ssz::Encode;
+    use strata_asm_txs_admin::actions::{CancelAction, MultisigAction};
+
+    let MultisigAction::Update(update) = decode_multisig_action_hex(target_hex).unwrap() else {
+        panic!("expected an update");
+    };
+
+    hex::encode(MultisigAction::Cancel(CancelAction::new(queue_id, update)).as_ssz_bytes())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
