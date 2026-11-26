@@ -133,6 +133,14 @@ export function SignScreen() {
 					setIsLoading(false)
 					return
 				}
+
+				// A cancel is signed only on its cancel screen, which checks its bytes against the proposal it cancels.
+				if (nextProposal.targetActionId !== null) {
+					setLoadError('This is a cancel proposal. Sign it from the cancel screen of the proposal it cancels.')
+					setIsLoading(false)
+					return
+				}
+
 				const sighashResult = await computeSighash(nextProposal.seqNo, nextProposal.actionHex)
 				if (!sighashResult.ok) {
 					throw new Error(sighashResult.error)

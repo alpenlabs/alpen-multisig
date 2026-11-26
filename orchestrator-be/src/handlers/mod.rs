@@ -336,6 +336,31 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn generic_create_rejects_cancel_actions() {
+        use crate::infrastructure::action_codec::{cancel_action_hex, test_fixture_action_hex};
+
+        let app = test_app();
+        let token = login(app.clone(), SIGNER_A_SK, SIGNER_A_PK).await;
+        let cancel_hex = cancel_action_hex(&test_fixture_action_hex(), 0);
+        let body = create_action_body(&cancel_hex, SIGNER_A_PK, SIGNER_A_SK);
+        let request = json_request("POST", "/proposals", Some(body), Some(&token));
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("/proposals/:action_id/cancel"));
+
+        let request = json_request("GET", "/proposals", None, Some(&token));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response_json(response).await["proposals"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
     /// Sessions stay time-bounded: once a Bearer token is past its expiry it is refused, whatever the TTL.
     #[tokio::test]
     async fn test_expired_session_is_rejected() {

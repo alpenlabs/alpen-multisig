@@ -16,6 +16,7 @@ use crate::infrastructure::asm_role_membership::{
 };
 use crate::infrastructure::bitcoin_rpc::BitcoinRpcClient;
 use chrono::{DateTime, Utc};
+use strata_asm_txs_admin::actions::MultisigAction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionContext<'a> {
@@ -1608,7 +1609,7 @@ async fn cascade_enact_associated_cancel(
 /// Create a cancel proposal for an Approved target whose reveal confirmed, or return the existing
 /// one (idempotent).
 ///
-/// `action_hex` encodes `MultisigAction::Cancel` — built by the desktop before signing.
+/// A new cancel must name the target's queue id and carry its decoded update.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_cancel_proposal(
     repo: &dyn ProposalRepository,
@@ -1662,6 +1663,42 @@ pub(crate) async fn create_cancel_proposal(
 
     if let Some(existing) = repo.find_cancel_for_target(&target_action_id).await? {
         return Ok(existing);
+    }
+
+    let MultisigAction::Cancel(cancel) =
+        action_codec::decode_multisig_action_hex(action_hex).map_err(AppError::BadRequest)?
+    else {
+        return Err(AppError::BadRequest("expected a cancel action".into()));
+    };
+    let MultisigAction::Update(target_update) =
+        action_codec::decode_multisig_action_hex(&target.action_hex)
+            .map_err(AppError::BadRequest)?
+    else {
+        return Err(AppError::BadRequest(
+            "cancel target must be an update".into(),
+        ));
+    };
+
+    if cancel.update() != &target_update {
+        return Err(AppError::BadRequest(
+            "cancel's embedded update differs from the target update".into(),
+        ));
+    }
+
+    let queue_id = match target.update_id_in_queue {
+        Some(queue_id) => queue_id,
+        None => update_id_in_queue_for_action(asm_rpc_url, &target.action_hex)
+            .await?
+            .ok_or_else(|| {
+                AppError::BadRequest("target's queue id is not known yet; try again shortly".into())
+            })?,
+    };
+    let supplied_id = *cancel.target_id();
+
+    if supplied_id != queue_id {
+        return Err(AppError::BadRequest(format!(
+            "expected target queue id {queue_id}, supplied {supplied_id}"
+        )));
     }
 
     let required_signatures = threshold_for_authority(asm_rpc_url, target.authority).await?;
@@ -2100,19 +2137,6 @@ mod tests {
         signed_approval(&ACTION_HEX, 1, 2, false)
     }
 
-    fn cancel_action_hex(target: &Proposal) -> String {
-        use ssz::Encode;
-        use strata_asm_txs_admin::actions::{CancelAction, MultisigAction};
-
-        let MultisigAction::Update(update) =
-            action_codec::decode_multisig_action_hex(&target.action_hex).unwrap()
-        else {
-            panic!("expected an update");
-        };
-
-        hex::encode(MultisigAction::Cancel(CancelAction::new(0, update)).as_ssz_bytes())
-    }
-
     fn signed_approval(
         action_hex: &str,
         seq_no: u64,
@@ -2486,7 +2510,7 @@ mod tests {
             .is_none());
 
         let target = save_approved_proposal(&repo, Authority::StrataAdmin, 1).await;
-        let cancel_hex = cancel_action_hex(&target);
+        let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
         let wrong_sequence = signed_approval(&cancel_hex, 1, 1, false);
         let error = create_cancel_proposal(
             &repo,
@@ -4049,7 +4073,7 @@ mod tests {
         let repo = new_repo();
         let target = save_approved_proposal(&repo, Authority::StrataAdmin, 1).await;
 
-        let cancel_hex = cancel_action_hex(&target);
+        let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
         let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
         let cancel = create_cancel_proposal(
             &repo,
@@ -4138,7 +4162,7 @@ mod tests {
         .await
         .unwrap();
 
-        let cancel_hex = cancel_action_hex(&target);
+        let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
         let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
         let cancel = create_cancel_proposal(
             &repo,
@@ -4207,7 +4231,7 @@ mod tests {
         let repo = new_repo();
         let target = save_approved_proposal(&repo, Authority::StrataAdmin, 1).await;
 
-        let cancel_hex = cancel_action_hex(&target);
+        let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
         let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
         let cancel = create_cancel_proposal(
             &repo,
@@ -4325,7 +4349,7 @@ mod tests {
         seq_no: SeqNo,
     ) -> Proposal {
         let action_hex = test_fixture_action_hex();
-        save_approved_proposal_with_action(repo, authority, seq_no, &action_hex).await
+        save_approved_proposal_with_action(repo, authority, seq_no, &action_hex, Some(0)).await
     }
 
     async fn save_approved_proposal_with_action(
@@ -4333,6 +4357,7 @@ mod tests {
         authority: Authority,
         seq_no: SeqNo,
         action_hex: &str,
+        queue_id: Option<u32>,
     ) -> Proposal {
         let sig = signed_approval(action_hex, seq_no, 1, false);
         let session = SessionContext {
@@ -4358,6 +4383,13 @@ mod tests {
         transition_to_approved(repo, session_b, "mock://asm-membership", &created.action_id)
             .await
             .unwrap();
+
+        if let Some(queue_id) = queue_id {
+            repo.update_update_id_in_queue(&created.action_id, queue_id)
+                .await
+                .unwrap();
+        }
+
         repo.update_broadcast_status(
             &created.action_id,
             BroadcastStatus::RevealConfirmed,
@@ -4377,7 +4409,7 @@ mod tests {
         // StrataAdmin has a mock threshold of 2; use it for cancel creation
         let target = save_approved_proposal(&repo, Authority::StrataAdmin, 1).await;
 
-        let cancel_hex = cancel_action_hex(&target);
+        let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
         let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
         let cancel = create_cancel_proposal(
             &repo,
@@ -4416,11 +4448,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancel_creation_rejects_unbound_actions_without_saving() {
+        let cancel_hex = action_codec::cancel_action_hex(&ACTION_HEX, 0);
+        let other_update = test_fixture_council_rotation_action_hex();
+
+        for (action_hex, queue_id, expected_error) in [
+            (ACTION_HEX.to_string(), Some(0), "expected a cancel action"),
+            (
+                action_codec::cancel_action_hex(&other_update, 0),
+                Some(0),
+                "embedded update differs",
+            ),
+            (
+                cancel_hex.clone(),
+                Some(7),
+                "expected target queue id 7, supplied 0",
+            ),
+            ("not-hex".into(), Some(0), "invalid action hex"),
+            (cancel_hex, None, "queue id is not known yet"),
+        ] {
+            let repo = new_repo();
+            let target = save_approved_proposal_with_action(
+                &repo,
+                Authority::StrataAdmin,
+                1,
+                &ACTION_HEX,
+                queue_id,
+            )
+            .await;
+            let signer = sig_a();
+            let error = create_cancel_proposal(
+                &repo,
+                MOCK_MEMBERSHIP_URL,
+                NETWORK,
+                session_of(&signer),
+                target.action_id,
+                2,
+                &action_hex,
+                &signer.signature_hex,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(error, AppError::BadRequest(ref message) if message.contains(expected_error)),
+                "{error}"
+            );
+            assert_eq!(
+                repo.list_by_status(target.authority, None)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_create_cancel_proposal_idempotent() {
         let repo = new_repo();
         let target = save_approved_proposal(&repo, Authority::StrataAdmin, 1).await;
 
-        let cancel_hex = cancel_action_hex(&target);
+        let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
         let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
         let first = create_cancel_proposal(
             &repo,
@@ -4475,7 +4563,7 @@ mod tests {
             .await
             .unwrap();
 
-        let cancel_hex = cancel_action_hex(&pending);
+        let cancel_hex = action_codec::cancel_action_hex(&pending.action_hex, 0);
         let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
         let err = create_cancel_proposal(
             &repo,
@@ -4519,7 +4607,7 @@ mod tests {
             .await
             .unwrap();
 
-            let cancel_hex = cancel_action_hex(&target);
+            let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
             let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
             let err = create_cancel_proposal(
                 &repo,
@@ -4564,11 +4652,16 @@ mod tests {
             test_fixture_safe_harbor_address_action_hex(),
         ] {
             let repo = new_repo();
-            let target =
-                save_approved_proposal_with_action(&repo, Authority::StrataAdmin, 1, &action_hex)
-                    .await;
+            let target = save_approved_proposal_with_action(
+                &repo,
+                Authority::StrataAdmin,
+                1,
+                &action_hex,
+                Some(0),
+            )
+            .await;
             let signer = sig_a();
-            let cancel_hex = cancel_action_hex(&target);
+            let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
             let cancel_signature = signed_approval(&cancel_hex, 2, 1, false);
             let cancel_as = |authority| {
                 create_cancel_proposal(
@@ -4612,10 +4705,11 @@ mod tests {
             Authority::SecurityCouncil,
             1,
             &test_fixture_defcon_1_action_hex(),
+            None,
         )
         .await;
 
-        let cancel_hex = cancel_action_hex(&target);
+        let cancel_hex = action_codec::cancel_action_hex(&target.action_hex, 0);
         let cancel_signature = signed_approval(&cancel_hex, 99, 1, false);
         let err = create_cancel_proposal(
             &repo,

@@ -110,6 +110,16 @@ pub async fn create_proposal(
 
     let action =
         action_codec::decode_multisig_action_hex(&body.action_hex).map_err(AppError::BadRequest)?;
+
+    if matches!(
+        action,
+        strata_asm_txs_admin::actions::MultisigAction::Cancel(_)
+    ) {
+        return Err(AppError::BadRequest(
+            "create cancels with POST /proposals/:action_id/cancel".into(),
+        ));
+    }
+
     asm_role_membership::require_authorized_for_action(auth.authority, &action)?;
 
     let required_signatures =

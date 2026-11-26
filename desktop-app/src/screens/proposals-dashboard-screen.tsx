@@ -170,7 +170,12 @@ export function ProposalsDashboardScreen() {
 					}
 				}}
 				onSignProposal={(actionId) => {
-					navigate(`/proposals/${actionId}/sign`)
+					const p = proposals.find((pr) => pr.actionId === actionId)
+					if (p?.kind === 'cancel' && p.targetActionId !== null) {
+						navigate(`/proposals/${p.targetActionId}/cancel/sign`)
+					} else {
+						navigate(`/proposals/${actionId}/sign`)
+					}
 				}}
 				onBroadcastProposal={(actionId) => {
 					navigate(`/proposals/${actionId}/broadcast`)
