@@ -6,6 +6,7 @@ import { decodeActionHex, type DecodedAction } from '@/api/signing'
 import {
 	buildSafeHarborChange,
 	type SafeHarborChange,
+	type SafeHarborDestination,
 } from '@/domain/safe-harbor-change/model/build-safe-harbor-change'
 import { multisigUpdateTargetAuthority } from '@/lib/multisig-update-target'
 import {
@@ -26,6 +27,7 @@ export type DecodedProposalData = {
 	 * be read — see `buildSafeHarborChange`.
 	 */
 	safeHarborChange: SafeHarborChange | null
+	safeHarborProposed: SafeHarborDestination | null
 	/**
 	 * The bridge's live safe harbor flag, read only where it is already being read: the same
 	 * `getSafeHarborStatus` call the rotation's change table comes from. `false` everywhere else,
@@ -37,9 +39,10 @@ export type DecodedProposalData = {
 	isLoading: boolean
 }
 
-const NOTHING_DECODED: DecodedProposalData = {
+export const NOTHING_DECODED: DecodedProposalData = {
 	signerSetChange: null,
 	safeHarborChange: null,
+	safeHarborProposed: null,
 	safeHarborActivated: false,
 	allSigners: [],
 	isLoading: false,
@@ -130,6 +133,7 @@ export function useDecodedProposal(proposal: Proposal | null): DecodedProposalDa
 						setDecodedData({
 							...NOTHING_DECODED,
 							proposalKey,
+							safeHarborProposed: proposed,
 							safeHarborActivated: harborRes.ok && harborRes.data.activated,
 							safeHarborChange: buildSafeHarborChange({
 								installed: harborRes.ok
