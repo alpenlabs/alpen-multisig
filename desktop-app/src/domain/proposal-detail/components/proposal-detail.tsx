@@ -6,7 +6,8 @@ import { ApprovalsList } from '@/components/approvals-list'
 import { DeviceSigningHint } from '@/components/device-signing-hint'
 import { SignerAdminId } from '@/components/signer-admin-id'
 import { SignerSetChangeTable } from '@/domain/signer-set-change/components/signer-set-change-table'
-import { SafeHarborChangeTable } from '@/domain/safe-harbor-change/components/safe-harbor-change-table'
+import { sweepDestinationSection } from '../model/sweep-destination-section'
+import { Destination, SafeHarborChangeTable } from '@/domain/safe-harbor-change/components/safe-harbor-change-table'
 import type { DeviceSigningDisplay } from '@/lib/device-signing-display'
 import { lastChangeLabel } from '@/lib/last-change-label'
 import { ImportBundleModal, type ImportBroadcastState } from '@/domain/proposal-detail/components/import-bundle-modal'
@@ -30,6 +31,7 @@ type Props = {
 	 * the signer compares it while the device is prompting — not a screen away (#402).
 	 */
 	deviceDisplay?: DeviceSigningDisplay
+	signBlockedReason?: string | null
 	onSign: () => void
 	onBroadcast: () => void
 	/** Send this signer's own commit + reveal beside the pair in flight (#605). Omitted where there is no row. */
@@ -65,7 +67,7 @@ function deriveProposalTitle(proposal: Proposal, decodedData: DecodedProposalDat
 
 	// Named by what it does, like every other action: a bare `Proposal #N` on a list of pending
 	// approvals says nothing about which of them moves the bridge's sweep destination.
-	if (decodedData.safeHarborChange !== null) return 'Change sweep destination'
+	if (sweepDestinationSection(decodedData) !== null) return 'Change sweep destination'
 
 	const change = decodedData.signerSetChange
 	if (change === null) return `Proposal #${proposal.seqNo}`
@@ -91,6 +93,7 @@ export function ProposalDetail({
 	signerPubkey,
 	decodedData,
 	deviceDisplay,
+	signBlockedReason = null,
 	onSign,
 	onBroadcast,
 	onSendAdditionalPair,
@@ -118,6 +121,7 @@ export function ProposalDetail({
 	const [bundleCopied, setBundleCopied] = useState(false)
 	const [bundleDownloaded, setBundleDownloaded] = useState(false)
 	const [showImportModal, setShowImportModal] = useState(false)
+	const destinationSection = sweepDestinationSection(decodedData)
 	const title = deriveProposalTitle(proposal, decodedData)
 
 	function handleCopyBundle() {
@@ -181,12 +185,19 @@ export function ProposalDetail({
 			    The detail screen is where every approver after the author decides: they never saw the
 			    create form, so without this section they are asked to authorize where the bridge sweeps
 			    to from a screen that does not name it. */}
-			{decodedData.safeHarborChange !== null && (
+			{destinationSection !== null && (
 				<div className="overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-sm">
 					<div className="border-b border-[#f3f4f6] px-6 py-4">
 						<SectionLabel>Sweep destination</SectionLabel>
 					</div>
-					<SafeHarborChangeTable change={decodedData.safeHarborChange} />
+					{destinationSection.kind === 'change' ? (
+						<SafeHarborChangeTable change={destinationSection.change} />
+					) : (
+						<div className="px-4 py-3">
+							<p className="m-0 mb-1.5 text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]">Proposed</p>
+							<Destination destination={destinationSection.proposed} />
+						</div>
+					)}
 				</div>
 			)}
 
@@ -342,11 +353,18 @@ export function ProposalDetail({
 
 					{canSign && deviceDisplay !== undefined && <DeviceSigningHint display={deviceDisplay} />}
 
+					{canSign && signBlockedReason !== null && (
+						<p role="status" className="m-0 text-body-sm text-[#6b7280]">
+							{signBlockedReason}
+						</p>
+					)}
+
 					{canSign && (
 						<button
 							type="button"
 							data-testid="e2e-detail-sign-button"
-							className="w-full rounded-xl border border-[#111827] bg-[#111827] px-4 py-2.5 text-body font-medium text-white transition hover:bg-black"
+							className="w-full rounded-xl border border-[#111827] bg-[#111827] px-4 py-2.5 text-body font-medium text-white transition hover:bg-black disabled:opacity-50"
+							disabled={signBlockedReason !== null}
 							onClick={onSign}
 						>
 							Sign

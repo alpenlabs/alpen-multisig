@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ApiResult } from '@/types'
-import { getMultisigConfig, type MultisigConfig } from '@/api/asm-state'
+import { getMultisigConfig, getSafeHarborStatus, type MultisigConfig } from '@/api/asm-state'
 import {
 	broadcastManualProposal,
 	prepareBroadcastManual,
@@ -14,7 +14,9 @@ import { decodedActionAuthorizingAuthority } from '@/domain/manual-proposal/mode
 import { multisigUpdateTargetAuthority } from '@/lib/multisig-update-target'
 import { deviceSigningDisplay, type DeviceSigningDisplay } from '@/lib/device-signing-display'
 import { useDeviceSigningMessage } from '@/hooks/use-device-signing-message'
-import type { DecodedProposalData } from '@/domain/proposal-detail/hooks/use-decoded-proposal'
+import { manualSignBlockedReason } from '../model/manual-sign-blocked-reason'
+import { buildSafeHarborChange } from '@/domain/safe-harbor-change/model/build-safe-harbor-change'
+import { NOTHING_DECODED, type DecodedProposalData } from '@/domain/proposal-detail/hooks/use-decoded-proposal'
 import { buildSignerSetChange, type SignerSetChange } from '@/domain/signer-set-change/model/build-signer-set-change'
 import type {
 	ManualBundleJson,
@@ -89,15 +91,9 @@ export function useManualProposal(initialBundle: ManualBundleJson | null, feeRat
 	const [importData, setImportData] = useState<ManualImportData | null>(null)
 
 	// Step 2
-	const [decodedData, setDecodedData] = useState<DecodedProposalData>({
-		signerSetChange: null,
-		// The manual bundle carries no live chain read, so it never has an installed destination to
-		// compare against — the detail view's section is absent here by construction, not by failure.
-		safeHarborChange: null,
-		safeHarborActivated: false,
-		allSigners: [],
-		isLoading: false,
-	})
+	const [review, setReview] = useState<(DecodedProposalData & { bundle: ManualImportData }) | null>(null)
+	const currentReview = review?.bundle === importData ? review : null
+	const decodedData = currentReview ?? { ...NOTHING_DECODED, isLoading: importData !== null }
 	const [localSignatures, setLocalSignatures] = useState<ManualSignature[]>([])
 	const [requiredSignatures, setRequiredSignatures] = useState<number | null>(null)
 	const [isSigning, setIsSigning] = useState(false)
@@ -132,18 +128,19 @@ export function useManualProposal(initialBundle: ManualBundleJson | null, feeRat
 		messageHash: deviceMessageHash,
 	})
 
+	const signBlockedReason = manualSignBlockedReason(currentReview !== null, adapter.vendor, deviceDisplay.kind)
+
 	// When importData is set (step advances to sign-collect), fetch decoded data and config.
 	useEffect(() => {
 		if (importData === null) return
 
 		let cancelled = false
-		setDecodedData((prev) => ({ ...prev, isLoading: true }))
 
 		// `allSigners` and `requiredSignatures` must always read the declared authority — never the
 		// target of the decoded action — mirroring `useDecodedProposal`. This first read is
 		// unchanged by the retarget below: same request, same timing.
 		void Promise.all([decodeActionHex(importData.actionHex), getMultisigConfig(importData.authority)]).then(
-			([actionRes, ownConfigRes]) => {
+			async ([actionRes, ownConfigRes]) => {
 				if (cancelled) return
 
 				const allSigners = ownConfigRes.ok ? ownConfigRes.data.signers : []
@@ -151,45 +148,47 @@ export function useManualProposal(initialBundle: ManualBundleJson | null, feeRat
 					setRequiredSignatures(ownConfigRes.data.threshold)
 				}
 
-				// The kind check narrows `actionRes.data` below; the target check is the actual guard —
-				// a council rotation's target authority (`role`) differs from the declared one.
-				if (!actionRes.ok || actionRes.data.kind !== 'multisig_update') {
-					setDecodedData((prev) => ({ ...prev, isLoading: false, allSigners, signerSetChange: null }))
+				if (!actionRes.ok || actionRes.data.kind === 'unknown') {
+					setSignError('Could not decode the imported action for review. Import the bundle again.')
 					return
 				}
+
 				const action = actionRes.data
-				const target = multisigUpdateTargetAuthority(action)
-				if (target === null) {
-					// Unreachable: `kind` is already narrowed to 'multisig_update' above, so the helper
-					// can only return `action.role` here. Kept as a real check, not a cast, so the
-					// compiler — not this comment — is what stays honest if that ever changes.
-					setDecodedData((prev) => ({ ...prev, isLoading: false, allSigners, signerSetChange: null }))
-					return
-				}
+				const decoded = { ...NOTHING_DECODED, bundle: importData, allSigners }
 
-				if (target === importData.authority) {
-					// No retarget: the config already read above for `allSigners` is also the target's.
-					setDecodedData((prev) => ({
-						...prev,
-						isLoading: false,
-						allSigners,
-						signerSetChange: buildManualTableOrNull(action, ownConfigRes),
-					}))
-					return
-				}
+				if (action.kind === 'safe_harbor_address_update') {
+					const proposed = { address: action.address, addressHex: action.addressHex }
+					const status = await getSafeHarborStatus()
 
-				// Retarget: the decoded action modifies an authority other than the one declared
-				// on import — a council rotation. The table renders against the *target's* config, read
-				// here, conditionally, only when it differs.
-				void getMultisigConfig(target).then((targetConfigRes) => {
 					if (cancelled) return
-					setDecodedData((prev) => ({
-						...prev,
-						isLoading: false,
-						allSigners,
-						signerSetChange: buildManualTableOrNull(action, targetConfigRes),
-					}))
-				})
+
+					setReview({
+						...decoded,
+						safeHarborProposed: proposed,
+						safeHarborChange: buildSafeHarborChange({
+							installed: status.ok ? status.data : null,
+							proposed,
+							isEnacted: false,
+						}),
+					})
+					return
+				}
+
+				const target = multisigUpdateTargetAuthority(action)
+
+				if (action.kind === 'multisig_update' && target !== null) {
+					// Retarget: the decoded action may modify an authority other than the one declared
+					// on import — a council rotation. The table renders against the *target's* config, read
+					// here, conditionally, only when it differs.
+					const targetConfig = target === importData.authority ? ownConfigRes : await getMultisigConfig(target)
+
+					if (cancelled) return
+
+					setReview({ ...decoded, signerSetChange: buildManualTableOrNull(action, targetConfig) })
+					return
+				}
+
+				setReview(decoded)
 			},
 		)
 
@@ -276,7 +275,8 @@ export function useManualProposal(initialBundle: ManualBundleJson | null, feeRat
 	}
 
 	async function handleSign() {
-		if (!importData) return
+		if (!importData || signBlockedReason !== null || isSigning) return
+
 		setIsSigning(true)
 		setSignError(null)
 		try {
@@ -470,13 +470,7 @@ export function useManualProposal(initialBundle: ManualBundleJson | null, feeRat
 		setImportErrors({})
 		setIsValidating(false)
 		setImportData(null)
-		setDecodedData({
-			signerSetChange: null,
-			safeHarborChange: null,
-			safeHarborActivated: false,
-			allSigners: [],
-			isLoading: false,
-		})
+		setReview(null)
 		setLocalSignatures([])
 		setRequiredSignatures(null)
 		setIsSigning(false)
@@ -501,6 +495,7 @@ export function useManualProposal(initialBundle: ManualBundleJson | null, feeRat
 		importData,
 		decodedData,
 		deviceDisplay,
+		signBlockedReason,
 		localSignatures,
 		requiredSignatures,
 		hasQuorum,

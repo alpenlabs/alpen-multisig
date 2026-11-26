@@ -14,6 +14,7 @@ type Props = {
 	decodedData: DecodedProposalData
 	/** What the connected device shows for this action — nothing for software signers. */
 	deviceDisplay: DeviceSigningDisplay
+	signBlockedReason: string | null
 	localSignatures: ManualSignature[]
 	requiredSignatures: number | null
 	hasQuorum: boolean
@@ -29,6 +30,7 @@ export function ManualSignCollect({
 	importData,
 	decodedData,
 	deviceDisplay,
+	signBlockedReason,
 	localSignatures,
 	requiredSignatures,
 	hasQuorum,
@@ -92,6 +94,7 @@ export function ManualSignCollect({
 				signerPubkey={signerPubkey}
 				decodedData={decodedData}
 				deviceDisplay={deviceDisplay}
+				signBlockedReason={signBlockedReason}
 				onSign={isSigning ? () => {} : onSign}
 				onBroadcast={onBroadcast}
 				onPasteSignatures={onPasteSignatures}

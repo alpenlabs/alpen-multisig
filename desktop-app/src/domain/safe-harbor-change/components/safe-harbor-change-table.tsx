@@ -61,7 +61,7 @@ export function SafeHarborChangeTable({ change }: Props) {
 	)
 }
 
-function Destination({ destination }: { destination: SafeHarborDestination }) {
+export function Destination({ destination }: { destination: SafeHarborDestination }) {
 	return (
 		<span className="flex flex-col gap-1">
 			{destination.address.length > 0 && (
