@@ -1,7 +1,8 @@
 //! Payout workflows. Reviews are single-use snapshots held in Rust; device calls are blocking.
 use super::wallet_session::WalletSession;
 use crate::infrastructure::{
-    hw_wallet::ledger::payout_admin as device, node_config_store::NodeConfig,
+    hw_wallet::ledger::payout_admin as device,
+    node_config_store::{connect_electrum, NodeConfig},
     payout_admin_policy_store::PolicyStore,
 };
 use bdk_wallet::KeychainKind;
@@ -223,7 +224,7 @@ impl PayoutAdminState {
             .to_string();
 
         run_blocking(move || {
-            let electrum = bdk_electrum::electrum_client::Client::new(&url)
+            let electrum = connect_electrum(&url)
                 .map_err(|error| format!("Electrum server at {url}: {error}"))?;
 
             operation(&electrum)

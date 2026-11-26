@@ -5,6 +5,7 @@
 //! inside `spawn_blocking` (the Electrum client is blocking I/O), mirroring
 //! `wallet_service.rs::do_sync`.
 
+use crate::infrastructure::node_config_store::connect_electrum;
 use async_trait::async_trait;
 
 use bdk_electrum::electrum_client::Error as ElectrumError;
@@ -100,8 +101,7 @@ fn broadcast_outcome(e: &ElectrumError) -> Result<(), FailureKind> {
 
 /// The connection to the server never opened: nothing was delivered.
 fn connect(url: &str) -> Result<bdk_electrum::electrum_client::Client, TxBroadcastError> {
-    bdk_electrum::electrum_client::Client::new(url)
-        .map_err(|e| err(FailureKind::NotDelivered, e.to_string()))
+    connect_electrum(url).map_err(|e| err(FailureKind::NotDelivered, e.to_string()))
 }
 
 fn broadcast_one(

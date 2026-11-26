@@ -231,7 +231,7 @@ export function NodeConfigModal({
 										className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-body-sm text-[#0a0a0a] outline-none focus:border-[#0a0a0a] focus:ring-1 focus:ring-[#0a0a0a]"
 									/>
 									<p className="mt-1 text-mono-sm text-[#9ca3af]">
-										Indexer used for Admin Wallet sync (tcp:// or ssl://). Leave empty for the local default.
+										Remote servers require ssl://. Use tcp:// only for this computer. Leave empty for the local default.
 									</p>
 								</div>
 								<div className="grid grid-cols-2 gap-3">

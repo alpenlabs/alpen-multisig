@@ -88,6 +88,17 @@ pub async fn save_node_config(
         custom_orchestrator_url: config.custom_orchestrator_url,
         payout_signers_path: config.payout_signers_path,
     };
+
+    if let (ConnectionMode::Custom, Some(url)) = (
+        &new_config.mode,
+        new_config
+            .custom_electrum_url
+            .as_deref()
+            .filter(|url| !url.is_empty()),
+    ) {
+        node_config_store::validate_electrum_url(url)?;
+    }
+
     node_config_store::save_node_config(&app, &new_config)?;
     let mut guard = state.0.write().map_err(|e| format!("lock error: {e}"))?;
     *guard = new_config;
@@ -120,10 +131,7 @@ pub async fn check_local_node(
     let btc_reachable = client.get(cfg.btc_rpc_url()).send().await.is_ok();
 
     // Electrum speaks raw TCP (tcp:// or ssl://host:port), not HTTP — probe with a TCP connect.
-    let electrum_addr = cfg
-        .electrum_url()
-        .trim_start_matches("tcp://")
-        .trim_start_matches("ssl://");
+    let electrum_addr = node_config_store::validate_electrum_url(cfg.electrum_url())?;
     let electrum_reachable = tokio::time::timeout(
         std::time::Duration::from_secs(3),
         tokio::net::TcpStream::connect(electrum_addr),
