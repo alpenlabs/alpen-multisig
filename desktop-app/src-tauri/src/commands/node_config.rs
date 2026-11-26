@@ -131,13 +131,16 @@ pub async fn check_local_node(
     let btc_reachable = client.get(cfg.btc_rpc_url()).send().await.is_ok();
 
     // Electrum speaks raw TCP (tcp:// or ssl://host:port), not HTTP — probe with a TCP connect.
-    let electrum_addr = node_config_store::validate_electrum_url(cfg.electrum_url())?;
-    let electrum_reachable = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        tokio::net::TcpStream::connect(electrum_addr),
-    )
-    .await
-    .is_ok_and(|r| r.is_ok());
+    // A URL the TLS rule rejects counts as unreachable, so the other status pills still show.
+    let electrum_reachable = match node_config_store::validate_electrum_url(cfg.electrum_url()) {
+        Ok(electrum_addr) => tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::net::TcpStream::connect(electrum_addr),
+        )
+        .await
+        .is_ok_and(|r| r.is_ok()),
+        Err(_) => false,
+    };
 
     let orchestrator_health_url = format!("{}/health", orchestrator_url.trim_end_matches('/'));
     let orchestrator_reachable = client
