@@ -18,6 +18,7 @@ commands! {
     payout_admin_sign_in(review_id: String) -> Value => sign_in(review_id);
     payout_admin_sign_out() -> () => sign_out();
     payout_admin_overview() -> Value => pending_and_past();
+    payout_admin_verify_pending_with_report(txid: String, text: String) -> () => verify_pending_with_report(txid, text);
     payout_admin_review_pending(txid: String) -> Value => review_block_payouts_tx(None, Some(txid));
     payout_admin_sign_pending(review_id: String) -> wire::PasteSignaturesView => sign_block_payouts_tx(review_id, false);
     payout_admin_copy_signatures(txid: String) -> String => copy_transaction_text(txid, true);

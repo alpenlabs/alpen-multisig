@@ -97,7 +97,7 @@ If setup fails, run `./stop.sh` and start again from Step 1.
 
 ## Block Payouts Button
 
-Each version 2 report identifies one ACK and the contest transaction ID for each claim to block. Claims may precede or follow the ACK.
+Each version 2 report identifies one ACK and the contest transaction ID for each claim to block. Claims may precede or follow the ACK. The app groups claims with the same operator and ACK evidence before splitting by size.
 
 ### Step 7 — Block Immature Claim
 
@@ -205,7 +205,7 @@ Each `psbt` command in the next steps creates fresh coins and mines blocks.
 
 3. In the app, paste the clipboard into the text field and click **Import**.
 
-**You should see:** "PSBT imported." The **Pending** tab shows the transaction with 0 / 2 signatures.
+**You should see:** "PSBT imported." The **Unverified** section of the **Pending** tab shows the transaction with 0 / 2 signatures.
 
 ### Step 11 — Import PSBT With Valid Signatures
 
@@ -218,7 +218,7 @@ Each `psbt` command in the next steps creates fresh coins and mines blocks.
 
 3. In the app, paste the clipboard into the text field and click **Import**.
 
-**You should see:** "PSBT imported." The **Pending** tab shows the transaction with 1 / 2 signatures.
+**You should see:** "PSBT imported." The **Unverified** section of the **Pending** tab shows the transaction with 1 / 2 signatures.
 
 ### Step 12 — Import PSBT With Invalid Signatures
 
@@ -231,7 +231,7 @@ Each `psbt` command in the next steps creates fresh coins and mines blocks.
 
 3. In the app, paste the clipboard into the text field and click **Import**.
 
-**You should see:** "PSBT imported." The **Pending** tab shows the transaction with 0 / 2 signatures. The app drops the invalid signature.
+**You should see:** "PSBT imported." The **Unverified** section of the **Pending** tab shows the transaction with 0 / 2 signatures. The app drops the invalid signature.
 
 ## Past Transactions
 

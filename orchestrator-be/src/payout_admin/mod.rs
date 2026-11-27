@@ -31,6 +31,14 @@ fn internal(error: impl Into<anyhow::Error>) -> AppError {
     AppError::Internal(error.into())
 }
 
+fn check_report_size(report: &str) -> Result<()> {
+    if MAX_REPORT_BYTES < report.len() {
+        return Err(bad("Report exceeds 32 KiB"));
+    }
+
+    Ok(())
+}
+
 fn decode(text: &str) -> Result<Psbt> {
     text.parse().map_err(bad)
 }
@@ -70,6 +78,7 @@ impl Service {
             PendingBlockPayoutsView {
                 txid: analysis.block_payouts_txid(),
                 psbt: record.psbt.clone(),
+                report: record.report.clone(),
                 expires_at: record.expires_at,
                 claim_input_count: analysis.connector_inputs().len(),
                 admins_signed: analysis.admins_signed(),
@@ -152,7 +161,45 @@ impl Service {
         Ok(())
     }
 
-    async fn submit(&self, text: &str, time: SystemTime) -> Result<PendingBlockPayoutsView> {
+    /// Stores the report as opaque text if the transaction has none; never replaces or
+    /// verifies it. Signers check reports themselves.
+    async fn attach_report(&self, id: &str, report: String, time: SystemTime) -> Result<()> {
+        check_report_size(&report)?;
+        for _ in 0..8 {
+            let mut record = self.get(id).await?;
+
+            if record.past.is_some() || record.expires_at <= time {
+                return Err(AppError::NotFound);
+            }
+
+            if record.report.is_some() {
+                return Err(AppError::Conflict("Report already attached".into()));
+            }
+
+            let version = record.version;
+            record.report = Some(report.clone());
+            record.version += 1;
+
+            if self.database.save(&record, Some(version)).await? {
+                return Ok(());
+            }
+        }
+
+        Err(AppError::Internal(anyhow::anyhow!(
+            "Could not attach report after concurrent updates"
+        )))
+    }
+
+    async fn submit(
+        &self,
+        text: &str,
+        report: Option<String>,
+        time: SystemTime,
+    ) -> Result<PendingBlockPayoutsView> {
+        if let Some(text) = &report {
+            check_report_size(text)?;
+        }
+
         let incoming = block_payouts_tx::import_psbt(&self.deployment(), text).map_err(bad)?;
         let id = incoming.unsigned_tx.compute_txid().to_string();
         let submission = self.submissions.lock().await;
@@ -193,6 +240,7 @@ impl Service {
             let mut record = existing.unwrap_or(Record {
                 txid: id.clone(),
                 psbt: incoming.to_string(),
+                report: None,
                 expires_at: deadline(time, EXPIRY)?,
                 first_signature_at: None,
                 broadcast_error: None,
@@ -211,6 +259,10 @@ impl Service {
                     input.tap_script_sigs.clear();
                     input.tap_key_sig = None;
                 }
+            }
+
+            if record.report.is_none() {
+                record.report.clone_from(&report);
             }
 
             let added =

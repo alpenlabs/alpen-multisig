@@ -249,7 +249,9 @@ async fn payout_admin_regtest_seed() {
         let first = api(
             wire::PENDING,
             &tokens[0],
-            Some(json!({"psbt":psbt.to_string()})),
+            Some(
+                json!({"psbt":psbt.to_string(), "report":serde_json::to_string(&report).unwrap()}),
+            ),
         )
         .await;
         assert_eq!(first["adminsSigned"], 1);

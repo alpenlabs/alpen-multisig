@@ -85,6 +85,18 @@ pub const VERIFY: &str = "/api/v1/payout-admin/verify";
 pub const PENDING: &str = "/api/v1/payout-admin/pending";
 /// POST SignaturesRequest -> PasteSignaturesView.
 pub const SIGNATURES: &str = "/api/v1/payout-admin/pending/:txid/signatures";
+/// POST ReportRequest -> (). Stores the report only if the transaction has none; 409 otherwise.
+pub const REPORT: &str = "/api/v1/payout-admin/pending/:txid/report";
+/// Largest report text the coordinator stores for one transaction, in bytes.
+pub const MAX_REPORT_BYTES: usize = 32768;
+
+/// A false claim report to attach to a pending transaction, as opaque text.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportRequest {
+    pub report: String,
+}
+
 /// GET -> Vec<PastBlockPayoutsView>.
 pub const PAST: &str = "/api/v1/payout-admin/past";
 /// GET -> TransactionCopy. Pending returns PSBT; past returns signed raw tx.
@@ -132,6 +144,7 @@ pub struct VerifyResponse {
 pub struct PsbtRequest {
     /// Base64 encoding of the PSBT.
     pub psbt: String,
+    pub report: Option<String>,
 }
 
 /// Submits pasted admin signatures for the transaction identified by the route.
@@ -152,6 +165,7 @@ pub struct PendingBlockPayoutsView {
     pub txid: Txid,
     /// Base64 PSBT including the signatures collected so far.
     pub psbt: String,
+    pub report: Option<String>,
     /// Pending transaction deadline in epoch seconds.
     #[serde(with = "unix_seconds", rename = "expiresAtUnixSeconds")]
     pub expires_at: SystemTime,

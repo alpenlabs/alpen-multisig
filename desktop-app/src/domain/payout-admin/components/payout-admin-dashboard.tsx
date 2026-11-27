@@ -113,6 +113,7 @@ export function PayoutAdminDashboard({ hook }: { hook: PayoutAdminHook }) {
 						signingTransaction: hook.signingTransaction,
 						onSign: hook.signPending,
 					}}
+					onVerify={hook.openVerifyModal}
 					onRetry={hook.handleRetry}
 					onPasteSignatures={openPasteModal}
 					onExport={handleExport}
@@ -129,6 +130,15 @@ export function PayoutAdminDashboard({ hook }: { hook: PayoutAdminHook }) {
 					txId={pasteTxId}
 					error={hook.error}
 					onSubmit={handlePasteSignatures}
+					onClose={closeModal}
+				/>
+			)}
+
+			{activeModal?.kind === 'verify' && (
+				<ImportPsbtModal
+					verifyReport
+					error={hook.error}
+					onImport={(text) => hook.handleVerify(activeModal.txId, text)}
 					onClose={closeModal}
 				/>
 			)}

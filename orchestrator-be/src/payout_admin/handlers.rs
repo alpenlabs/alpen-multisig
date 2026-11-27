@@ -1,7 +1,7 @@
 use super::*;
 use auth::Auth;
 use axum::{
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     routing::{get, post},
     Json, Router,
 };
@@ -12,6 +12,11 @@ pub fn router(service: Arc<Service>) -> Router {
         .route(CHALLENGE, post(auth::challenge))
         .route(VERIFY, post(auth::verify))
         .route(PENDING, get(pending).post(submit))
+        .route(
+            REPORT,
+            // JSON escapes one byte as at most 6 bytes; 1 KiB covers the wrapper object.
+            post(attach_report).layer(DefaultBodyLimit::max(6 * MAX_REPORT_BYTES + 1024)),
+        )
         .route(SIGNATURES, post(paste))
         .route(PAST, get(past))
         .route(TRANSACTIONS, get(copy))
@@ -32,8 +37,23 @@ async fn submit(
     Json(request): Json<PsbtRequest>,
 ) -> Result<Json<PendingBlockPayoutsView>> {
     Ok(Json(
-        service.submit(&request.psbt, SystemTime::now()).await?,
+        service
+            .submit(&request.psbt, request.report, SystemTime::now())
+            .await?,
     ))
+}
+
+async fn attach_report(
+    _: Auth,
+    State(service): State<Arc<Service>>,
+    Path(id): Path<String>,
+    Json(request): Json<ReportRequest>,
+) -> Result<Json<()>> {
+    service
+        .attach_report(&id, request.report, SystemTime::now())
+        .await?;
+
+    Ok(Json(()))
 }
 
 async fn paste(

@@ -81,6 +81,29 @@ impl Coordinator {
         route: &str,
         body: Option<Value>,
     ) -> Result<T, String> {
+        let response = self.send(route, body).await?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Coordinator {}: {}",
+                response.status(),
+                response.text().await.map_err(|error| error.to_string())?
+            ));
+        }
+
+        response.json().await.map_err(|error| error.to_string())
+    }
+
+    async fn pending(&self, txid: Txid) -> Result<wire::PendingBlockPayoutsView, String> {
+        let records: Vec<wire::PendingBlockPayoutsView> = self.request(wire::PENDING, None).await?;
+
+        records
+            .into_iter()
+            .find(|record| record.txid == txid)
+            .ok_or_else(|| "Transaction is no longer pending".into())
+    }
+
+    async fn send(&self, route: &str, body: Option<Value>) -> Result<reqwest::Response, String> {
         if self
             .session
             .as_ref()
@@ -111,15 +134,7 @@ impl Coordinator {
             format!("Coordinator at {origin}: {}", error.without_url())
         })?;
 
-        if !response.status().is_success() {
-            return Err(format!(
-                "Coordinator {}: {}",
-                response.status(),
-                response.text().await.map_err(|error| error.to_string())?
-            ));
-        }
-
-        response.json().await.map_err(|error| error.to_string())
+        Ok(response)
     }
 }
 
@@ -133,7 +148,7 @@ struct Identity {
 #[derive(Clone)]
 enum Payload {
     SignIn(Coordinator, wire::ChallengeResponse),
-    Transaction(Psbt, bool),
+    Transaction(Psbt, Box<report::Report>, bool),
 }
 
 enum Deadline {
@@ -145,6 +160,8 @@ struct Review {
     expires: Deadline,
     payload: Payload,
 }
+
+type BundledTransactions = HashMap<BundledTransactionId, (Psbt, report::Report)>;
 
 /// One sitting in the desktop app. One lock lets these fields change together.
 /// Closing the app drops this state. Here “session” means the payout admin's sitting,
@@ -162,9 +179,9 @@ struct SessionState {
     /// or deployment load clears them all. Transaction reviews can remain here after expiry.
     open_reviews: HashMap<ReviewId, Review>,
     /// Valid claims and ID of the last report check, cleared on identity read or deployment load.
-    ready_for_bundling: Option<(VerificationId, Vec<BundledClaim>)>,
+    ready_for_bundling: Option<(VerificationId, Vec<(BundledClaim, report::Report)>)>,
     /// Last bundle and its PSBTs by transaction ID, cleared on identity read or deployment load.
-    last_bundle: Option<(BundleId, HashMap<BundledTransactionId, Psbt>)>,
+    last_bundle: Option<(BundleId, BundledTransactions)>,
     /// IDs of this admin's own pending block payouts transactions. `WalletService` holds
     /// their fee coin reservations. This list identifies which reservations to release.
     /// A transaction this admin created is added just before the Ledger signs it, so it
@@ -174,6 +191,34 @@ struct SessionState {
     /// or Fee bump, all entries and reservations are cleared and rebuilt from pending
     /// transactions that spend this wallet's coins. Closing the app drops them all.
     own_pending_txids: Vec<Txid>,
+    checked_reports: HashMap<(Txid, String), CheckedReport>,
+    manual_reports: HashMap<Txid, CoveredReport>,
+}
+
+/// How long a failed Electrum check of a stored report is kept before the overview checks it again.
+const REPORT_RECHECK_DELAY: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CoveredReport {
+    report: report::Report,
+    inputs: Vec<OutPoint>,
+}
+
+/// The cached result of checking a coordinator-stored report for one pending transaction.
+#[derive(Debug, Clone)]
+struct CheckedReport {
+    result: Result<CoveredReport, String>,
+    /// Set when the failure can go away (Electrum unreachable, too few confirmations, claim
+    /// inputs that no longer match): the report is checked again from this time on. `None`
+    /// keeps the result for the session.
+    retry_after: Option<Instant>,
+}
+
+impl CheckedReport {
+    /// Whether the overview should check the stored report (again) at `now`.
+    fn is_due(checked: Option<&CheckedReport>, now: Instant) -> bool {
+        checked.is_none_or(|checked| checked.retry_after.is_some_and(|time| time <= now))
+    }
 }
 
 /// Desktop state shared across payout commands, including the active session, verified claims, and signing reviews.
@@ -262,6 +307,8 @@ impl PayoutAdminState {
         }
 
         state.open_reviews.clear();
+        state.checked_reports.clear();
+        state.manual_reports.clear();
         state.coordinator = None;
         state.last_bundle = None;
         state.ready_for_bundling = None;
@@ -330,6 +377,8 @@ impl PayoutAdminState {
         let mut state = self.inner.lock().await;
         state.roster = Some(roster);
         state.deployment = Some(deployment);
+        state.checked_reports.clear();
+        state.manual_reports.clear();
         state.coordinator = None;
         state.open_reviews.clear();
         state.last_bundle = None;
@@ -372,6 +421,8 @@ impl PayoutAdminState {
         else {
             return Err("Not a sign-in review".into());
         };
+        state.checked_reports.clear();
+        state.manual_reports.clear();
         state.coordinator = None;
         let (deployment, identity) = state.checked_deployment_and_identity()?;
         let signer = identity.signer.clone();
@@ -446,6 +497,8 @@ impl PayoutAdminState {
 
 impl SessionState {
     fn sign_out(&mut self) {
+        self.checked_reports.clear();
+        self.manual_reports.clear();
         self.coordinator = None;
         self.open_reviews.clear();
         self.ready_for_bundling = None;
@@ -717,6 +770,139 @@ fn verify_claims_on_chain(
     ))
 }
 
+fn parse_report(text: &str, network: Network) -> Result<report::Report, String> {
+    if report::MAX_PASTE_BYTES < text.len() {
+        return Err("The pasted report is too large".into());
+    }
+
+    report::Report::from_value(
+        serde_json::from_str(text).map_err(|error| error.to_string())?,
+        network,
+    )
+}
+
+impl SessionState {
+    fn verified_report(
+        &self,
+        txid: Txid,
+        stored: Option<&String>,
+    ) -> Result<CoveredReport, String> {
+        if let Some(report) = self.manual_reports.get(&txid) {
+            return Ok(report.clone());
+        }
+
+        let text = stored.ok_or("No report")?;
+
+        self.checked_reports
+            .get(&(txid, text.clone()))
+            .map(|checked| checked.result.clone())
+            .ok_or_else(|| "Report has not been verified".to_string())?
+    }
+}
+
+impl PayoutAdminState {
+    /// Checks the report against this signer's Electrum server: it must cover the transaction's
+    /// claim inputs (exactly, unless `allow_superset`), every claim must pass, and the inputs
+    /// must match the chain. Signing calls this right before the Ledger prompt (signing invariant).
+    async fn verify_transaction_report(
+        &self,
+        deployment: &Deployment,
+        report: &report::Report,
+        analysis: &block_payouts_tx::Analysis,
+        psbt: &Psbt,
+        allow_superset: bool,
+    ) -> Result<CoveredReport, String> {
+        let inputs: Vec<_> = analysis
+            .connector_inputs()
+            .iter()
+            .map(|input| input.admin_payout_outpoint())
+            .collect();
+        let report = report.clone();
+        let psbt = psbt.clone();
+        let deployment = deployment.clone();
+        self.with_electrum(move |electrum| {
+            let transactions = fetch_report_transactions(electrum, std::slice::from_ref(&report))?;
+            let selected = report.for_inputs(&inputs, allow_superset, |contest| {
+                report::claim_outpoint(&transactions, contest)
+            })?;
+
+            for claim in verify_claims_on_chain(
+                electrum,
+                &deployment,
+                std::slice::from_ref(&selected),
+                &transactions,
+            )? {
+                if let report::ReportVerdict::Invalid(reason)
+                | report::ReportVerdict::Spent(reason) = claim.verdict()
+                {
+                    let contest = claim.report().contest_txids()[0];
+
+                    return Err(format!("Contest {contest}: {reason}"));
+                }
+            }
+
+            // Input classification uses PSBT metadata. Check its prevouts against Electrum.
+            check_inputs_on_chain(electrum, &psbt)?;
+
+            Ok(CoveredReport {
+                report: selected,
+                inputs,
+            })
+        })
+        .await
+    }
+
+    pub async fn verify_pending_with_report(
+        &self,
+        txid: String,
+        text: String,
+    ) -> Result<(), String> {
+        let txid = parse_txid(&txid)?;
+        let mut state = self.inner.lock().await;
+        self.refresh_deployment(&mut state).await?;
+        let deployment = state.deployment.as_ref().ok_or("Load deployment first")?;
+        let coordinator = state.signed_in_coordinator()?;
+        let pending = coordinator.pending(txid).await?;
+        let psbt = block_payouts_tx::import_psbt(deployment, &pending.psbt)
+            .map_err(|error| error.to_string())?;
+        let analysis =
+            block_payouts_tx::analyze(deployment, &psbt).map_err(|error| error.to_string())?;
+
+        if txid != analysis.block_payouts_txid() {
+            return Err("Coordinator returned a different transaction".into());
+        }
+
+        let report = parse_report(&text, deployment.network())?;
+        let report = self
+            .verify_transaction_report(deployment, &report, &analysis, &psbt, true)
+            .await?;
+        let text = serde_json::to_string(&report.report).map_err(|error| error.to_string())?;
+
+        // Upload first, so a failed upload leaves the transaction unverified instead of showing
+        // an error while it still counts as verified. 409: another report is stored; keep it.
+        if pending.report.is_none() {
+            let response = coordinator
+                .send(
+                    &wire::REPORT.replace(":txid", &txid.to_string()),
+                    Some(json!({"report":text})),
+                )
+                .await?;
+
+            let status = response.status();
+
+            // Redirects are not followed, so only a success or 409 means a report is stored.
+            if !status.is_success() && status != reqwest::StatusCode::CONFLICT {
+                // "Coordinator 401" lets the screens end an expired session.
+                return Err(format!("Coordinator {status}: the report was not stored"));
+            }
+        }
+
+        state.manual_reports.insert(txid, report);
+
+        Ok(())
+    }
+}
+
 impl PayoutAdminState {
     /// Checks pasted reports against Electrum and saves the valid claims under a verification ID for bundling.
     pub async fn check_reports(&self, text: String) -> Result<Value, String> {
@@ -733,13 +919,18 @@ impl PayoutAdminState {
                 verify_claims_on_chain(electrum, &deployment, &parsed_reports, &transactions)
             })
             .await?;
+        let mut seen = HashSet::new();
         let claims = reports
             .iter()
             .filter(|report| matches!(report.verdict(), report::ReportVerdict::Valid))
+            .filter(|report| seen.insert(report.new_claim_admin_payout_outpoint()))
             .filter_map(|report| {
-                Some(BundledClaim::new(
-                    report.new_claim_admin_payout_outpoint()?.txid,
-                    report.n_of_n()?,
+                Some((
+                    BundledClaim::new(
+                        report.new_claim_admin_payout_outpoint()?.txid,
+                        report.n_of_n()?,
+                    ),
+                    report.report().clone(),
                 ))
             })
             .collect();
@@ -769,12 +960,15 @@ impl PayoutAdminState {
             let _ = self.refresh_deployment(&mut state).await;
         }
 
-        let deployment = state.deployment.as_ref().ok_or("Load deployment first")?;
+        let deployment = state.deployment.clone().ok_or("Load deployment first")?;
         let mut views = Vec::new();
         for pending_payout in &mut pending {
-            let checked = block_payouts_tx::import_psbt(deployment, &pending_payout.psbt)
-                .and_then(|psbt| block_payouts_tx::analyze(deployment, &psbt));
-            let Ok(analysis) = checked else { continue };
+            let Ok(psbt) = block_payouts_tx::import_psbt(&deployment, &pending_payout.psbt) else {
+                continue;
+            };
+            let Ok(analysis) = block_payouts_tx::analyze(&deployment, &psbt) else {
+                continue;
+            };
 
             if analysis.block_payouts_txid() != pending_payout.txid {
                 continue;
@@ -790,11 +984,69 @@ impl PayoutAdminState {
                 .collect();
             let mut view =
                 serde_json::to_value(&*pending_payout).map_err(|error| error.to_string())?;
-            view["claimInputs"] = json!(analysis
+            let inputs: Vec<_> = analysis
                 .connector_inputs()
                 .iter()
-                .map(|connector_input| connector_input.admin_payout_outpoint().to_string())
-                .collect::<Vec<_>>());
+                .map(|input| input.admin_payout_outpoint())
+                .collect();
+            view["claimInputs"] = json!(inputs);
+
+            if let Some(text) = &pending_payout.report {
+                let key = (pending_payout.txid, text.clone());
+
+                if CheckedReport::is_due(state.checked_reports.get(&key), Instant::now()) {
+                    let checked = match parse_report(text, deployment.network()) {
+                        Err(error) => CheckedReport {
+                            result: Err(error),
+                            retry_after: None,
+                        },
+                        Ok(report) => match self
+                            .verify_transaction_report(
+                                &deployment,
+                                &report,
+                                &analysis,
+                                &psbt,
+                                false,
+                            )
+                            .await
+                        {
+                            Ok(report) => CheckedReport {
+                                result: Ok(report),
+                                retry_after: None,
+                            },
+                            // Corrected PSBT metadata can restore coverage on the next refresh.
+                            // An unresolved contest returns its own error and waits the delay.
+                            Err(error) if error == report::INPUT_MISMATCH => CheckedReport {
+                                result: Err(error),
+                                retry_after: Some(Instant::now()),
+                            },
+                            Err(error) => CheckedReport {
+                                result: Err(error),
+                                retry_after: Some(
+                                    Instant::now()
+                                        .checked_add(REPORT_RECHECK_DELAY)
+                                        .unwrap_or_else(Instant::now),
+                                ),
+                            },
+                        },
+                    };
+                    state.checked_reports.insert(key, checked);
+                }
+            }
+
+            // Verified: exact coverage now, claims checked once this session. See the block
+            // payouts invariants in docs/operations/threat-model.md.
+            let verified = state
+                .verified_report(pending_payout.txid, pending_payout.report.as_ref())
+                .and_then(|checked| {
+                    if checked.inputs != inputs {
+                        return Err(report::INPUT_MISMATCH.into());
+                    }
+
+                    Ok(())
+                });
+            view["verified"] = json!(verified.is_ok());
+            view["reason"] = json!(verified.err());
             views.push(view);
         }
 
@@ -963,7 +1215,7 @@ impl PayoutAdminState {
             .map(|(_, claims)| claims)
             .ok_or("Reports are stale; verify again")?
             .iter()
-            .filter(|claim| !removed.contains(&claim.outpoint()))
+            .filter(|(claim, _)| !removed.contains(&claim.outpoint()))
             .cloned()
             .collect::<Vec<_>>();
         let scripts: HashMap<_, _> = deployment
@@ -977,12 +1229,12 @@ impl PayoutAdminState {
                 let mut spends = SpendCheck::default();
                 recheck
                     .into_iter()
-                    .filter_map(|claim| {
+                    .filter_map(|(claim, report)| {
                         let Some(script) = scripts.get(&claim.n_of_n()) else {
                             return Some(Err("Unknown N/N key; verify reports again".into()));
                         };
                         match spends.is_spent_in_block(electrum, claim.outpoint(), script) {
-                            Ok(false) => Some(Ok(claim)),
+                            Ok(false) => Some(Ok((claim, report))),
                             Ok(true) => None,
                             Err(error) => Some(Err(error)),
                         }
@@ -1040,7 +1292,7 @@ impl PayoutAdminState {
             .iter()
             .map(|(&outpoint, (txout, _, _))| AvailableCoin::new(outpoint, txout.value))
             .collect::<Vec<_>>();
-        let bundle = bundler::bundle(
+        let bundle = bundler::bundle_with_reports(
             &deployment,
             &claims,
             &coins,
@@ -1050,7 +1302,11 @@ impl PayoutAdminState {
         .map_err(|error| error.to_string())?;
         let mut transactions = Vec::new();
         let mut psbts = HashMap::new();
-        for transaction in bundle.txs() {
+        let mut total_fee = bitcoin::Amount::ZERO;
+        for (transaction, report) in bundle {
+            total_fee = total_fee
+                .checked_add(transaction.fee())
+                .ok_or("total fee overflow")?;
             let key = BundledTransactionId::new();
             transactions.push(json!({"transactionId":key,"claims":transaction.claims(),"claimInputCount":transaction.claims().len(),"feeSat":transaction.fee().to_sat(),"vsize":transaction.vsize(),"changeSat":transaction.change().to_sat(),"errors":transaction.errors().iter().map(|error| error.message()).collect::<Vec<_>>() }));
 
@@ -1080,22 +1336,24 @@ impl PayoutAdminState {
                     .map_err(|error| error.to_string())?;
                 psbts.insert(
                     key,
-                    block_payouts_tx::build_psbt_for_covenant(
-                        &deployment,
-                        deployment
-                            .covenants()
-                            .iter()
-                            .find(|entry| entry.n_of_n() == transaction.claims()[0].n_of_n())
-                            .ok_or("Unknown N/N key")?,
-                        &transaction.connectors(),
-                        &selected,
-                        &change,
-                    )
-                    .map_err(|error| error.to_string())?,
+                    (
+                        block_payouts_tx::build_psbt_for_covenant(
+                            &deployment,
+                            deployment
+                                .covenants()
+                                .iter()
+                                .find(|entry| entry.n_of_n() == transaction.claims()[0].n_of_n())
+                                .ok_or("Unknown N/N key")?,
+                            &transaction.connectors(),
+                            &selected,
+                            &change,
+                        )
+                        .map_err(|error| error.to_string())?,
+                        report,
+                    ),
                 );
             }
         }
-        let total_fee = bundle.total_fee().ok_or("total fee overflow")?;
         let bundle_id = BundleId::new();
         state.last_bundle = Some((bundle_id, psbts));
 
@@ -1114,7 +1372,7 @@ impl PayoutAdminState {
         self.refresh_deployment(&mut state).await?;
         let (deployment, identity) = state.checked_deployment_and_identity()?;
         let own = bundle.is_some();
-        let mut psbt = match bundle {
+        let (mut psbt, report) = match bundle {
             Some((bundle, transaction)) => {
                 let bundle = bundle.parse()?;
                 let transaction: BundledTransactionId = transaction.parse()?;
@@ -1129,24 +1387,16 @@ impl PayoutAdminState {
             }
             None => {
                 let txid = parse_txid(&txid.ok_or("Missing transaction")?)?;
-                let copy: wire::TransactionCopy = state
-                    .signed_in_coordinator()?
-                    .request(
-                        &wire::TRANSACTIONS.replace(":txid", &txid.to_string()),
-                        None,
-                    )
-                    .await?;
-                let wire::TransactionCopy::Psbt(text) = copy else {
-                    return Err("Transaction is already past".into());
-                };
-                let psbt = block_payouts_tx::import_psbt(deployment, &text)
+                let pending = state.signed_in_coordinator()?.pending(txid).await?;
+                let report = state.verified_report(txid, pending.report.as_ref())?;
+                let psbt = block_payouts_tx::import_psbt(deployment, &pending.psbt)
                     .map_err(|error| error.to_string())?;
 
                 if psbt.unsigned_tx.compute_txid() != txid {
                     return Err("Coordinator returned a different transaction".into());
                 }
 
-                psbt
+                (psbt, report.report)
             }
         };
         let analysis = block_payouts_tx::normalize(deployment, &mut psbt)
@@ -1157,8 +1407,7 @@ impl PayoutAdminState {
             return Err("Transaction fee exceeds 10,000 sat/vB".into());
         }
 
-        let copy = psbt.clone();
-        self.with_electrum(move |electrum| check_inputs_on_chain(electrum, &copy))
+        self.verify_transaction_report(deployment, &report, &analysis, &psbt, false)
             .await?;
         let key = ReviewId::new();
         let screens = identity.ledger_screens(
@@ -1176,7 +1425,7 @@ impl PayoutAdminState {
                         .checked_add(Duration::from_secs(300))
                         .ok_or("Review deadline out of range")?,
                 ),
-                payload: Payload::Transaction(psbt, own),
+                payload: Payload::Transaction(psbt, Box::new(report), own),
             },
         );
 
@@ -1191,7 +1440,8 @@ impl PayoutAdminState {
     ) -> Result<wire::PasteSignaturesView, String> {
         let mut state = self.inner.lock().await;
         self.refresh_deployment(&mut state).await?;
-        let Payload::Transaction(mut psbt, expected_own) = state.take_review(review_id.parse()?)?
+        let Payload::Transaction(mut psbt, report, expected_own) =
+            state.take_review(review_id.parse()?)?
         else {
             return Err("Not a transaction review".into());
         };
@@ -1223,9 +1473,6 @@ impl PayoutAdminState {
             }
         }
 
-        let copy = psbt.clone();
-        self.with_electrum(move |electrum| check_inputs_on_chain(electrum, &copy))
-            .await?;
         let wallet_service = self.wallet.current().ok_or("Connect Admin Wallet first")?;
 
         let fee_pass = own || has_unsigned_own_fee_inputs(&deployment, &identity.signer, &psbt)?;
@@ -1291,9 +1538,14 @@ impl PayoutAdminState {
             }
         }
 
-        let signed = self
-            .sign_on_ledger(&deployment, &identity, &mut psbt, fee_pass)
-            .await;
+        // Signing invariant: no Ledger prompt without a report checked in this same call.
+        let signed = async {
+            self.verify_transaction_report(&deployment, &report, &analysis, &psbt, false)
+                .await?;
+            self.sign_on_ledger(&deployment, &identity, &mut psbt, fee_pass)
+                .await
+        }
+        .await;
 
         if let Err(error) = signed {
             if fee_pass && !previously_reserved {
@@ -1311,7 +1563,7 @@ impl PayoutAdminState {
             let pending: wire::PendingBlockPayoutsView = coordinator_client
                 .request(
                     wire::PENDING,
-                    Some(json!({"psbt":block_payouts_tx::export_psbt(&deployment,&psbt).map_err(|error| error.to_string())?})),
+                    Some(json!({"report":serde_json::to_string(&report).map_err(|error| error.to_string())?, "psbt":block_payouts_tx::export_psbt(&deployment,&psbt).map_err(|error| error.to_string())?})),
                 )
                 .await?;
 
@@ -2040,6 +2292,57 @@ mod tests {
     }
 
     #[test]
+    fn only_failures_that_can_go_away_are_checked_again() {
+        let now = Instant::now();
+        let later = now.checked_add(REPORT_RECHECK_DELAY).unwrap();
+        let rejected = CheckedReport {
+            result: Err("Unsupported report version 1".into()),
+            retry_after: None,
+        };
+        let unreachable = CheckedReport {
+            result: Err("Electrum unreachable".into()),
+            retry_after: Some(later),
+        };
+        assert!(CheckedReport::is_due(None, now));
+        assert!(!CheckedReport::is_due(Some(&rejected), later));
+        assert!(!CheckedReport::is_due(Some(&unreachable), now));
+        assert!(CheckedReport::is_due(Some(&unreachable), later));
+    }
+
+    #[test]
+    fn pending_review_requires_verification_of_the_current_report() {
+        let mut session = SessionState::default();
+        let fixture = payout_admin_core::test_support::Fixture::new(3, 2);
+        let report = fixture.game(&fixture.deployment(), 0).report();
+        let txid = report.counterproof_ack_txid();
+        let text = serde_json::to_string(&report).unwrap();
+        let report = CoveredReport {
+            report,
+            inputs: Vec::new(),
+        };
+        assert_eq!(
+            session.verified_report(txid, None).unwrap_err(),
+            "No report"
+        );
+        assert!(session.verified_report(txid, Some(&text)).is_err());
+        session.checked_reports.insert(
+            (txid, text.clone()),
+            CheckedReport {
+                result: Ok(report.clone()),
+                retry_after: None,
+            },
+        );
+        assert_eq!(session.verified_report(txid, Some(&text)).unwrap(), report);
+        assert!(session
+            .verified_report(txid, Some(&String::from("different report")))
+            .is_err());
+        session.manual_reports.insert(txid, report.clone());
+        assert_eq!(session.verified_report(txid, None).unwrap(), report);
+        session.sign_out();
+        assert!(session.verified_report(txid, Some(&text)).is_err());
+    }
+
+    #[test]
     fn change_and_version_specific_device_checklists_are_bound_to_transaction() {
         let fixture = Fixture::new(3, 2);
         let deployment = fixture.deployment();
@@ -2093,6 +2396,7 @@ mod tests {
         let pending = wire::PendingBlockPayoutsView {
             txid: psbt.unsigned_tx.compute_txid(),
             psbt: psbt.to_string(),
+            report: None,
             expires_at: SystemTime::now()
                 .checked_add(Duration::from_secs(1))
                 .unwrap(),

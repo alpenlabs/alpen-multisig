@@ -63,6 +63,7 @@ use crate::deployment::{Covenant, Deployment};
 
 pub const REPORT_TYPE: &str = "strata-false-claim-report";
 pub const REPORT_VERSION: u32 = 2;
+pub const INPUT_MISMATCH: &str = "Report does not match the transaction";
 /// Largest accepted paste, in bytes.
 pub const MAX_PASTE_BYTES: usize = 4_000_000;
 /// Most reports accepted in one paste.
@@ -136,6 +137,40 @@ impl Report {
         }
 
         Ok(())
+    }
+
+    /// Select the contests whose resolved claim outpoints cover the transaction inputs. When
+    /// coverage fails and a contest could not be resolved, that contest's error is returned
+    /// instead of [`INPUT_MISMATCH`], since the contest may simply not be mined yet.
+    pub fn for_inputs(
+        &self,
+        inputs: &[OutPoint],
+        allow_superset: bool,
+        mut claim: impl FnMut(Txid) -> Result<OutPoint, String>,
+    ) -> Result<Self, String> {
+        let mut wanted: HashSet<_> = inputs.iter().copied().collect();
+        let mut contests = Vec::new();
+        let mut unresolved = None;
+
+        for &contest in self.contest_txids() {
+            match claim(contest) {
+                Ok(outpoint) if wanted.remove(&outpoint) => contests.push(contest),
+                Ok(_) => {}
+                Err(error) => {
+                    unresolved.get_or_insert_with(|| format!("Contest {contest}: {error}"));
+                }
+            }
+        }
+
+        if contests.is_empty()
+            || !wanted.is_empty()
+            || contests.len() != inputs.len()
+            || (!allow_superset && contests.len() != self.contest_txids().len())
+        {
+            return Err(unresolved.unwrap_or_else(|| INPUT_MISMATCH.into()));
+        }
+
+        Ok(self.with_contests(contests))
     }
 
     pub(crate) fn with_contests(&self, contest_txids: Vec<Txid>) -> Self {
@@ -380,6 +415,10 @@ pub struct VerifiedReport {
 }
 
 impl VerifiedReport {
+    pub fn report(&self) -> &Report {
+        &self.report
+    }
+
     pub fn n_of_n(&self) -> Option<bitcoin::secp256k1::PublicKey> {
         self.key
     }
@@ -1221,6 +1260,47 @@ mod tests {
         assert_eq!(checked[0].verdict, ReportVerdict::Valid);
         assert!(matches!(checked[1].verdict, ReportVerdict::Spent(_)));
         assert!(checked[2].invalid_reason().contains("does not know"));
+    }
+
+    #[test]
+    fn only_a_paste_can_supply_extra_claims() {
+        let (fixture, deployment, game) = setup();
+        let original = game.report();
+        let first = original.contest_txids()[0];
+        let other = fixture.game(&deployment, 1);
+        let second = other.report().contest_txids()[0];
+        let mut lookup = game.lookup();
+        lookup.extend(other.lookup());
+        let resolve = |contest| claim_outpoint(&lookup, contest);
+        let report = original.with_contests(vec![first, second]);
+        let inputs = [resolve(second).unwrap(), resolve(first).unwrap()];
+        assert_eq!(report.for_inputs(&inputs, false, resolve).unwrap(), report);
+        assert!(report.for_inputs(&inputs[1..], false, resolve).is_err());
+        assert_eq!(
+            report.for_inputs(&inputs[1..], true, resolve).unwrap(),
+            original
+        );
+        for allow_superset in [true, false] {
+            assert!(original
+                .for_inputs(&inputs, allow_superset, resolve)
+                .is_err());
+            assert!(report
+                .for_inputs(
+                    &[OutPoint::new(game.claim_txid(), 0)],
+                    allow_superset,
+                    resolve
+                )
+                .is_err());
+        }
+
+        // A contest Electrum does not know is named, not reported as a mismatch.
+        let unknown = |contest| claim_outpoint(&game.lookup(), contest);
+        let error = report.for_inputs(&inputs, false, unknown).unwrap_err();
+        assert!(error.starts_with(&format!("Contest {second}:")), "{error}");
+        assert_eq!(
+            report.for_inputs(&inputs[1..], true, unknown).unwrap(),
+            original
+        );
     }
 
     #[test]

@@ -341,11 +341,127 @@ pub fn bundle(
     Ok(Bundle { txs: transactions })
 }
 
+/// Allocate fee coins across evidence groups and bind each transaction to its exact claim proofs.
+pub fn bundle_with_reports(
+    deployment: &Deployment,
+    claims: &[(BundledClaim, crate::report::Report)],
+    coins: &[AvailableCoin],
+    fee_rate: FeeRate,
+    change: &ScriptBuf,
+) -> Result<Vec<(BundledTx, crate::report::Report)>, String> {
+    let mut groups = std::collections::BTreeMap::new();
+    for (claim, report) in claims {
+        groups
+            .entry(report.counterproof_ack_txid())
+            .or_insert_with(Vec::new)
+            .push((claim, report));
+    }
+
+    let mut available = coins.to_vec();
+    let mut transactions = Vec::new();
+    for group in groups.values() {
+        let selected: Vec<_> = group.iter().map(|(claim, _)| **claim).collect();
+        let proofs: std::collections::HashMap<_, _> = group
+            .iter()
+            .map(|(claim, report)| match report.contest_txids() {
+                [contest] => Ok((claim.outpoint(), *contest)),
+                _ => Err("Each claim needs a report cut down to its own contest"),
+            })
+            .collect::<Result<_, _>>()?;
+        for transaction in bundle(deployment, &selected, &available, fee_rate, change)?.txs {
+            available.retain(|coin| !transaction.fee_coins.contains(coin));
+            let claims = transaction
+                .claims
+                .iter()
+                .map(|claim| {
+                    proofs
+                        .get(&claim.outpoint())
+                        .copied()
+                        .ok_or("Missing claim evidence")
+                })
+                .collect::<Result<_, _>>()?;
+            transactions.push((transaction, group[0].1.with_contests(claims)));
+        }
+    }
+
+    Ok(transactions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{Fixture, P2TR_PLACEHOLDER_SCRIPT};
     use bitcoin::{hashes::Hash, Txid};
+
+    #[test]
+    fn transactions_carry_only_their_own_claims_and_evidence() {
+        let fixture = Fixture::new(3, 2);
+        let deployment = fixture.deployment();
+        let key = deployment.covenant().n_of_n();
+        let first = fixture.game(&deployment, 0).report();
+        let second = fixture.game(&deployment, 1).report();
+        let third = fixture.game(&deployment, 2).report();
+        let shared = first.with_contests(third.contest_txids().to_vec());
+        let claims = [first.clone(), second.clone(), shared]
+            .into_iter()
+            .enumerate()
+            .map(|(index, report)| {
+                (
+                    BundledClaim::new(fixture.game(&deployment, index as u32).claim_txid(), key),
+                    report,
+                )
+            })
+            .collect::<Vec<_>>();
+        let transactions = bundle_with_reports(
+            &deployment,
+            &claims,
+            &[coin(1, 100_000), coin(2, 100_000)],
+            FeeRate::new(10).unwrap(),
+            &P2TR_PLACEHOLDER_SCRIPT,
+        )
+        .unwrap();
+        assert_eq!(transactions.len(), 2);
+        let mut fees = std::collections::HashSet::new();
+        for (transaction, report) in transactions {
+            assert!(transaction.is_ok());
+            assert!(fees.insert(transaction.fee_coins()[0].outpoint()));
+            let inputs: Vec<_> = transaction
+                .claims()
+                .iter()
+                .map(BundledClaim::outpoint)
+                .collect();
+            assert_eq!(
+                report
+                    .for_inputs(&inputs, false, |contest| claims
+                        .iter()
+                        .find(|(_, proof)| proof.contest_txids() == [contest])
+                        .map(|(claim, _)| claim.outpoint())
+                        .ok_or_else(|| String::from("unknown contest")))
+                    .unwrap(),
+                report
+            );
+
+            if report.counterproof_ack_txid() == first.counterproof_ack_txid() {
+                assert_eq!(inputs.len(), 2);
+                assert!(report.contest_txids().contains(&first.contest_txids()[0]));
+                assert!(report.contest_txids().contains(&third.contest_txids()[0]));
+            } else {
+                assert_eq!(report, second);
+            }
+        }
+
+        // A report that still names several contests is refused, not dropped.
+        let mut uncut = claims.clone();
+        uncut[0].1 = first.with_contests(vec![first.contest_txids()[0], third.contest_txids()[0]]);
+        assert!(bundle_with_reports(
+            &deployment,
+            &uncut,
+            &[coin(1, 100_000), coin(2, 100_000)],
+            FeeRate::new(10).unwrap(),
+            &P2TR_PLACEHOLDER_SCRIPT,
+        )
+        .is_err());
+    }
 
     #[test]
     fn claim_wire_contains_the_admin_outpoint() {

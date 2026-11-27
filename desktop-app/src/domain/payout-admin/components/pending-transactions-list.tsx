@@ -12,14 +12,46 @@ type Props = {
 	onPasteSignatures: (txId: string) => void
 	onExport: (txId: string) => void
 	onCopySignatures: (txId: string) => void
+	onVerify: (txId: string) => void
 	onRetry: (txId: string) => void
 }
 
 const PAGE_SIZE = 10
 
-export function PendingTransactionsList({
+export function PendingTransactionsList(props: Props) {
+	if (!props.txs.length) return <PendingSection {...props} />
+
+	return (
+		<>
+			{props.hasConflicts && (
+				<Alert kind="warning">
+					Some pending transactions share a claim input (marked ⚠). Only one of them can confirm. Open Details to see
+					which input.
+				</Alert>
+			)}
+			{[true, false].map((verified) => {
+				const txs = props.txs.filter((tx) => tx.verified === verified)
+
+				return (
+					<section key={String(verified)}>
+						<h2 className="m-0 mb-2 mt-5 text-body font-semibold text-[#0a0a0a]">
+							{verified ? 'Verified' : 'Unverified'}
+						</h2>
+						{txs.length ? (
+							<PendingSection {...props} txs={txs} />
+						) : (
+							<p className="m-0 text-body-sm text-[#6b7280]">No {verified ? 'verified' : 'unverified'} transactions.</p>
+						)}
+					</section>
+				)
+			})}
+		</>
+	)
+}
+
+function PendingSection({
 	txs,
-	hasConflicts,
+	onVerify,
 	signingProps,
 	onPasteSignatures,
 	onExport,
@@ -29,7 +61,8 @@ export function PendingTransactionsList({
 	const [page, setPage] = useState(1)
 	const [open, setOpen] = useState<string | null>(null)
 	const totalPages = Math.ceil(txs.length / PAGE_SIZE)
-	const paged = txs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+	const currentPage = Math.min(page, totalPages)
+	const paged = txs.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
 	if (txs.length === 0) {
 		return (
@@ -50,12 +83,6 @@ export function PendingTransactionsList({
 
 	return (
 		<div className="flex flex-col gap-3">
-			{hasConflicts && (
-				<Alert kind="warning">
-					Some pending transactions share a claim input (marked ⚠). Only one of them can confirm. Open Details to see
-					which input.
-				</Alert>
-			)}
 			<div className="rounded-xl border border-[#e5e7eb] bg-white">
 				<div
 					className={`${PENDING_COLUMNS} border-b border-[#e5e7eb] px-5 py-2 text-mono-sm font-semibold uppercase tracking-wider text-[#9ca3af]`}
@@ -73,6 +100,7 @@ export function PendingTransactionsList({
 						open={open === tx.id}
 						onToggle={() => setOpen(open === tx.id ? null : tx.id)}
 						signingProps={signingProps}
+						onVerify={() => onVerify(tx.id)}
 						onRetry={() => onRetry(tx.id)}
 						onPasteSignatures={() => onPasteSignatures(tx.id)}
 						onExport={() => onExport(tx.id)}
@@ -80,7 +108,7 @@ export function PendingTransactionsList({
 					/>
 				))}
 			</div>
-			<Paginator page={page} totalPages={totalPages} onPageChange={setPage} />
+			<Paginator page={currentPage} totalPages={totalPages} onPageChange={setPage} />
 		</div>
 	)
 }
