@@ -178,7 +178,7 @@ export function AuthoritySelectionPhase({
 				<span>
 					<strong className="block text-[1rem] font-semibold text-[#111827]">Payout Administrator</strong>
 					<span className="mt-1 block text-body text-[#6b7280]">
-						Admin Block Payouts, signed with a Ledger. No ASM connection required.
+						Admin Block Payouts, signed with a Ledger. Requires the configured ASM endpoint.
 					</span>
 					<span className="mt-1.5 block text-label text-[#9ca3af]">Signer set · signers.toml</span>
 				</span>

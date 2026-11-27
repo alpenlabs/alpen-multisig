@@ -80,7 +80,7 @@ pub async fn verify(
         .x_only_public_key()
         .0;
 
-    if service.deployment.admin_index(&key).is_none() {
+    if service.deployment().admin_index(&key).is_none() {
         return Err(AppError::Unauthorized);
     }
 

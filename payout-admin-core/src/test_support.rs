@@ -1,9 +1,10 @@
-//! Test fixtures: deterministic admins and operators, `params.toml` and roster text, and a
+//! Test fixtures: deterministic admins and operators, ASM history and signer roster, and a
 //! structurally exact bridge game (claim → contest → counterproof → ack) built with the bridge's
 //! connectors. A report carries only the claims, the contests and the ack, not the counterproof.
 
 use std::collections::HashMap;
 use std::str::FromStr;
+#[cfg(test)]
 use std::sync::LazyLock;
 
 use bitcoin::{
@@ -23,6 +24,7 @@ use strata_bridge_connectors::{
 use crate::deployment::{account_path, Deployment};
 use crate::report::{MinedBlock, MinedTx, Report};
 
+#[cfg(test)]
 pub const DOCKER_PARAMS: &str = r#"network = "regtest"
 genesis_height = 101
 
@@ -74,26 +76,13 @@ contested_payout_timelock = 1_008
 unstaking_timelock = 2_016
 "#;
 
-const P2P_KEYS: [&str; 3] = [
-    "0de7729dcbeb5069136ee4bff1c4f2fd822fe8fbc9b518df434d4f0c6312d8f5",
-    "255ab0da6d468a22910a7cf54021763417c63c28bbafd4e2359daf103bb61e9d",
-    "aeabd3a377c160590a0927bca0cb315eaebf5acc87476fbb317c6260b6f123c6",
-];
-const PAYOUT_DESCS: [&str; 3] = [
-    "0494047994e5ac5dabf9737a176f0c79eeb9f09c9749a087a138ddb1ff3caceb2f",
-    "044f935f6e983bd4bca4e512cc1a5f50137e3b4a03e20c90f60ac7387a88c2e114",
-    "04b63fea4640fbbf630e2bd949a588b63426bb2ea2771ce5b2caf44dbfa90d6cd3",
-];
-
-pub static CONTEST_TIMELOCK: LazyLock<bitcoin::relative::Height> = LazyLock::new(|| {
-    let params: strata_bridge_common::params::Params = toml::from_str(DOCKER_PARAMS).unwrap();
-
-    bitcoin::relative::Height::from_height(params.protocol.contest_timelock)
-});
+pub const CONTEST_TIMELOCK: bitcoin::relative::Height = bitcoin::relative::Height::from_height(144);
 
 #[cfg(test)]
 pub(crate) static P2TR_PLACEHOLDER_SCRIPT: LazyLock<ScriptBuf> =
     LazyLock::new(|| ScriptBuf::from_bytes([&[0x51, 0x20][..], &[0x02; 32][..]].concat()));
+
+pub const NACK_TIMELOCK: bitcoin::relative::Height = bitcoin::relative::Height::from_height(144);
 
 pub const NEW_CLAIM_HEIGHT: u64 = 500;
 
@@ -175,40 +164,6 @@ impl Fixture {
         PublicKey::from_secret_key(&Secp256k1::new(), &sk(77))
     }
 
-    pub fn params_toml(&self) -> String {
-        self.params_toml_with_schedule(&[(0, 101, None), (1, 101, None), (2, 101, None)])
-    }
-
-    pub fn params_toml_with_schedule(&self, operators: &[(usize, u64, Option<u64>)]) -> String {
-        let mut toml = format!(
-            "network = \"regtest\"\ngenesis_height = 101\n\n[keys.admin]\npubkeys = [{}]\nthreshold = {}\n\n",
-            (0..self.admin_masters.len())
-                .map(|i| format!("\"{}\"", self.admin_xonly(i)))
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.threshold
-        );
-        for &(i, activation_height, deactivation_height) in operators {
-            toml.push_str(&format!(
-                "[[keys.operators]]\nindex = {i}\ncovenant_key = \"{}\"\np2p_key = \"{}\"\npayout_descriptor = \"{}\"\nactivation_height = {activation_height}\n",
-                self.operator_xonly(i),
-                P2P_KEYS[i],
-                PAYOUT_DESCS[i]
-            ));
-
-            if let Some(height) = deactivation_height {
-                toml.push_str(&format!("deactivation_height = {height}\n"));
-            }
-
-            toml.push('\n');
-        }
-        let protocol = DOCKER_PARAMS.split("[protocol]").nth(1).unwrap();
-        toml.push_str("[protocol]");
-        toml.push_str(protocol);
-
-        toml
-    }
-
     pub fn roster_toml(&self) -> String {
         let order: Vec<usize> = (0..self.admin_masters.len()).collect();
 
@@ -216,7 +171,7 @@ impl Fixture {
     }
 
     pub fn roster_toml_with_order(&self, order: &[usize]) -> String {
-        let mut toml = String::from("network = \"regtest\"\n\n");
+        let mut toml = format!("network = \"regtest\"\nthreshold = {}\n\n", self.threshold);
         for &i in order {
             toml.push_str(&format!(
                 "[[admins]]\nlabel = \"Admin {i}\"\nfingerprint = \"{}\"\nxpub = \"{}\"\n\n",
@@ -228,8 +183,29 @@ impl Fixture {
         toml
     }
 
+    pub fn operator_table(&self) -> strata_asm_proto_bridge_state::operator::OperatorTable {
+        let keys = (0..self.operator_keys.len())
+            .map(|index| self.operator_xonly(index).into())
+            .collect::<Vec<_>>();
+
+        strata_asm_proto_bridge_state::operator::OperatorTable::from_operator_list(&keys)
+    }
+
     pub fn deployment(&self) -> Deployment {
-        Deployment::load(&self.params_toml(), Some(&self.roster_toml())).unwrap()
+        Deployment::load(
+            &crate::deployment::SignerRoster::from_toml(&self.roster_toml()).unwrap(),
+            &self.operator_table(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn after_operator_removal(&self) -> Deployment {
+        let mut operators = self.operator_table();
+        operators.apply_membership_changes(&[], &[1]);
+        let roster = crate::SignerRoster::from_toml(&self.roster_toml()).unwrap();
+
+        Deployment::load(&roster, &operators).unwrap()
     }
 
     pub fn game(&self, deployment: &Deployment, variant: u32) -> GameTxs {
@@ -242,7 +218,7 @@ impl Fixture {
         variant: u32,
         n_of_n: PublicKey,
     ) -> GameTxs {
-        GameTxs::build(self, deployment, variant, n_of_n)
+        GameTxs::build(self, deployment, variant, n_of_n, n_of_n)
     }
 }
 
@@ -291,7 +267,7 @@ fn ack_tx(
         deployment.network(),
         n_of_n_xonly,
         n_of_n_xonly,
-        deployment.nack_timelock(),
+        NACK_TIMELOCK,
         Amount::ZERO,
     );
     let leaf = connector.leaf_scripts().remove(0);
@@ -382,7 +358,7 @@ impl GameTxs {
             deployment.network(),
             n_of_n_xonly,
             watchtower_keys,
-            *CONTEST_TIMELOCK,
+            CONTEST_TIMELOCK,
             Amount::ZERO,
         );
         let admin_connector = strata_bridge_connectors::prelude::ClaimAdminPayoutConnector::new(
@@ -434,11 +410,17 @@ impl GameTxs {
         (claim, contest)
     }
 
-    fn build(fixture: &Fixture, deployment: &Deployment, variant: u32, n_of_n: PublicKey) -> Self {
+    pub(crate) fn build(
+        fixture: &Fixture,
+        deployment: &Deployment,
+        variant: u32,
+        acked_key: PublicKey,
+        new_key: PublicKey,
+    ) -> Self {
         let (acked_claim, acked_contest) =
-            Self::claim_and_contest(fixture, deployment, n_of_n, 10 + variant * 2);
+            Self::claim_and_contest(fixture, deployment, acked_key, 10 + variant * 2);
         let (new_claim, new_contest) =
-            Self::claim_and_contest(fixture, deployment, n_of_n, 11 + variant * 2);
+            Self::claim_and_contest(fixture, deployment, new_key, 11 + variant * 2);
         let contest_txid = acked_contest.compute_txid();
         let counterproof = tx(
             vec![transaction_input(
@@ -448,7 +430,7 @@ impl GameTxs {
             vec![dummy_out(30), dummy_out(31)],
         );
         let counterproof_txid = counterproof.compute_txid();
-        let ack = ack_tx(deployment, n_of_n, counterproof_txid, contest_txid);
+        let ack = ack_tx(deployment, acked_key, counterproof_txid, contest_txid);
 
         Self {
             operator_pubkey: fixture.operator_xonly(0),

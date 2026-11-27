@@ -37,8 +37,6 @@ pub struct NodeConfig {
     #[serde(default)]
     pub custom_orchestrator_url: Option<String>,
     #[serde(default)]
-    pub payout_params_path: Option<std::path::PathBuf>,
-    #[serde(default)]
     pub payout_signers_path: Option<std::path::PathBuf>,
 }
 
@@ -134,6 +132,22 @@ pub fn save_node_config(app: &AppHandle, config: &NodeConfig) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_payout_settings_preserve_the_signer_file_and_rpc() {
+        let config: NodeConfig = serde_json::from_value(serde_json::json!({
+            "mode": "custom",
+            "customStrataRpcUrl": "http://localhost:8081",
+            "payoutParamsPath": "params.toml",
+            "payoutSignersPath": "signers.toml"
+        }))
+        .unwrap();
+        assert_eq!(config.strata_rpc_url(), "http://localhost:8081");
+        assert_eq!(
+            config.payout_signers_path.as_deref(),
+            Some(std::path::Path::new("signers.toml"))
+        );
+    }
 
     #[test]
     fn local_mode_returns_localhost_urls_and_credentials() {

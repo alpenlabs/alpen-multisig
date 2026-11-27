@@ -9,6 +9,7 @@ import { useEnsureAdminWalletSession } from '@/domain/admin-wallet/hooks/use-ens
 import { PayoutSignInPanel } from '@/domain/payout-admin/components/payout-sign-in-panel'
 import { PayoutSignInModal } from '@/domain/payout-admin/components/payout-sign-in-modal'
 import { Alert, Working } from '@/domain/payout-admin/components/payout-ui'
+import { payoutCheckAsm } from '@/api/payout-admin'
 import { Button } from '@/components/button'
 import { useNavigate } from 'react-router-dom'
 import { DisconnectButton } from '@/components/disconnect-button'
@@ -28,6 +29,88 @@ function sameSettings(saved: NodeConfig | null, draft: NodeConfig): boolean {
 }
 
 export function PayoutAdminScreen() {
+	const node = useNodeConfig()
+	const navigate = useNavigate()
+	const configLoaded = node.config !== null
+	const [asmError, setAsmError] = useState<string | null | undefined>(undefined)
+	const [attempt, setAttempt] = useState(0)
+	const [settings, setSettings] = useState(false)
+	const [saveError, setSaveError] = useState<string | null>(null)
+	// Checked on entry and on retry only. Once the screen is open, saving new settings reloads the
+	// configuration in place and reports ASM errors there, so the open screen never unmounts.
+	useEffect(() => {
+		let active = true
+		setAsmError(undefined)
+
+		if (configLoaded)
+			void payoutCheckAsm().then((result) => {
+				if (active) setAsmError(result.ok ? null : result.error)
+			})
+
+		return () => {
+			active = false
+		}
+	}, [configLoaded, attempt])
+
+	if (asmError === null) return <ConnectedPayoutAdminScreen />
+
+	function openSettings() {
+		setSaveError(null)
+		setSettings(true)
+	}
+
+	function closeSettings() {
+		setSettings(false)
+
+		if (node.config) node.recheck(node.config)
+	}
+
+	async function saveSettings(draft: NodeConfig) {
+		const failure = await node.saveConfig(draft)
+
+		if (failure !== null) {
+			setSaveError(failure)
+
+			return
+		}
+
+		setSettings(false)
+		setAttempt((count) => count + 1)
+	}
+
+	return (
+		<ScreenShell onOpenNodeSettings={openSettings}>
+			{asmError === undefined ? (
+				<Working label="Checking ASM endpoint…" />
+			) : (
+				<Alert kind="error">
+					{asmError}
+					<div className="mt-2 flex gap-2">
+						<Button onClick={() => setAttempt((count) => count + 1)}>Retry</Button>
+						<Button variant="secondary" onClick={openSettings}>
+							Connection settings
+						</Button>
+						<Button variant="secondary" onClick={() => navigate('/')}>
+							Back to wallet connection
+						</Button>
+					</div>
+				</Alert>
+			)}
+			<NodeConfigModal
+				isOpen={settings}
+				config={node.config}
+				localNodeStatus={node.localNodeStatus}
+				isSaving={node.isSaving}
+				onRecheck={node.recheck}
+				onSave={saveSettings}
+				saveError={saveError}
+				onClose={closeSettings}
+			/>
+		</ScreenShell>
+	)
+}
+
+function ConnectedPayoutAdminScreen() {
 	const hook = usePayoutAdmin()
 	const navigate = useNavigate()
 	const { disconnectSession, wallet, adapter, sessionTimeLabel, sessionWarning } = useSession()
@@ -47,9 +130,9 @@ export function PayoutAdminScreen() {
 		if (initialLoad.current || node.config === null || busy) return
 
 		initialLoad.current = true
-		const { payoutParamsPath, payoutSignersPath } = node.config
+		const { payoutSignersPath } = node.config
 
-		if (payoutParamsPath && payoutSignersPath) void loadDeployment(payoutParamsPath, payoutSignersPath)
+		if (payoutSignersPath) void loadDeployment(payoutSignersPath)
 	}, [node.config, busy, loadDeployment])
 
 	async function handleDisconnect() {
@@ -88,8 +171,8 @@ export function PayoutAdminScreen() {
 
 		if (!unchanged) hook.reset()
 
-		if (draft.payoutParamsPath && draft.payoutSignersPath) {
-			await hook.loadDeployment(draft.payoutParamsPath, draft.payoutSignersPath)
+		if (draft.payoutSignersPath) {
+			await hook.loadDeployment(draft.payoutSignersPath)
 		}
 	}
 

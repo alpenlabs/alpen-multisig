@@ -127,7 +127,7 @@ pub fn electrum(method: &str, params: Value) -> Result<Value, String> {
 pub struct Coordinator(pub Child);
 
 impl Coordinator {
-    pub async fn start(params: &std::path::Path, postgres: bool) -> Self {
+    pub async fn start(signers: &std::path::Path, asm_url: &str, postgres: bool) -> Self {
         let mut command = Command::new(
             std::env::var("PAYOUT_RT_SERVER").expect("set PAYOUT_RT_SERVER to built server binary"),
         );
@@ -135,9 +135,9 @@ impl Coordinator {
             .env("SERVER_HOST", "127.0.0.1")
             .env("SERVER_PORT", "18403")
             .env("PAYOUT_ADMIN_PUBLIC_URL", "http://127.0.0.1:18403")
-            .env("PAYOUT_PARAMS_PATH", params)
+            .env("PAYOUT_SIGNERS_PATH", signers)
             .env("PAYOUT_ELECTRUM_URL", "tcp://127.0.0.1:18401")
-            .env("STRATA_ADMIN_STATE_RPC_URL", "http://127.0.0.1:1")
+            .env("STRATA_ADMIN_STATE_RPC_URL", asm_url)
             .env("BITCOIN_RPC_URL", "http://127.0.0.1:1")
             .env("BITCOIN_NETWORK", "regtest")
             .env("RUST_LOG", "error")

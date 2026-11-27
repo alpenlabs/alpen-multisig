@@ -2,6 +2,9 @@
 #[path = "../../tests/payout_admin_common/mod.rs"]
 mod payout_admin_common;
 
+#[path = "../../tests/payout_admin_asm/mod.rs"]
+mod payout_admin_asm;
+
 #[allow(dead_code)]
 #[path = "../../tests/payout_admin_tools/mod.rs"]
 mod payout_admin_tools;
@@ -16,7 +19,7 @@ use bitcoin::{
 use payout_admin_common::*;
 use payout_admin_core::{
     block_payouts_tx::{self, ChangeOutput, ConnectorRef, FeeInput},
-    deployment::{account_path, xonly_at_0_0},
+    deployment::account_path,
     report::Report,
     test_support::Fixture,
     Deployment,
@@ -32,6 +35,8 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
+
+const NACK_TIMELOCK: bitcoin::relative::Height = bitcoin::relative::Height::from_height(1);
 
 const DIRECTORY: &str = "/tmp/payout-test";
 
@@ -92,8 +97,7 @@ async fn setup(directory: &Path, fixture: &Fixture) -> Result<()> {
     let fingerprint = prompt("Ledger fingerprint (8 hex digits)", |value| {
         value.parse::<Fingerprint>().ok()
     })?;
-    let mut roster = String::from("network = \"regtest\"\n");
-    let mut keys = Vec::new();
+    let mut roster = String::from("network = \"regtest\"\nthreshold = 2\n");
 
     for (index, (fingerprint, account)) in [(fingerprint, account), second, third]
         .into_iter()
@@ -101,24 +105,15 @@ async fn setup(directory: &Path, fixture: &Fixture) -> Result<()> {
     {
         let number = index + 1;
         writeln!(roster, "\n[[admins]]\nlabel = \"Admin {number}\"\nfingerprint = \"{fingerprint}\"\nxpub = \"{account}\"")?;
-        keys.push(format!("\"{}\"", xonly_at_0_0(&account)?));
     }
 
     println!("Creating the test claims. Wait until this prints the next step.");
-    // The operator-only fixture supplies the protocol and operator schedule. A one-block NACK
-    // timelock keeps setup short: each ACK otherwise waits for 144 blocks.
-    let params = fixture
-        .params_toml()
-        .replacen(
-            "pubkeys = []",
-            &format!("pubkeys = [{}]", keys.join(", ")),
-            1,
-        )
-        .replacen("nack_timelock = 144", "nack_timelock = 1", 1);
-    let deployment = Deployment::load(&params, Some(&roster))?;
+    let deployment = Deployment::load(
+        &payout_admin_core::SignerRoster::from_toml(&roster)?,
+        &fixture.operator_table(),
+    )?;
     call(&Node, "createwallet", json!(["payout-phys"])).await;
     fs::create_dir_all(directory)?;
-    fs::write(directory.join("params.toml"), params)?;
     fs::write(directory.join("signers.toml"), roster)?;
     mine(&Node, 110).await;
     let address = Address::p2tr(
@@ -216,10 +211,12 @@ async fn game_report(
 
 async fn fresh_psbt(directory: &Path, fixture: &Fixture) -> Result<bitcoin::Psbt> {
     let deployment = Deployment::load(
-        &fs::read_to_string(directory.join("params.toml"))?,
-        Some(&fs::read_to_string(directory.join("signers.toml"))?),
+        &payout_admin_core::SignerRoster::from_toml(&fs::read_to_string(
+            directory.join("signers.toml"),
+        )?)?,
+        &fixture.operator_table(),
     )?;
-    let signer = &deployment.signers()?[1];
+    let signer = &deployment.signers()[1];
     let secp = Secp256k1::new();
     let n_of_n = n_of_n_keypair(fixture, &deployment);
     let game = claim_and_contest(&Node, fixture, &deployment, &n_of_n).await;
@@ -312,6 +309,10 @@ async fn main() -> Result<()> {
     let arguments: Vec<_> = env::args().skip(1).collect();
 
     match arguments.as_slice() {
+        [command] if command == "asm" => {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 18502)).await?;
+            payout_admin_asm::serve(listener, &Fixture::new(0, 2)).await?;
+        }
         [command] if command == "setup" => setup(directory, &Fixture::new(0, 2)).await?,
         [command] if command == "psbt" => {
             println!("{}", fresh_psbt(directory, &Fixture::new(0, 2)).await?)
@@ -323,7 +324,7 @@ async fn main() -> Result<()> {
                 fs::read_to_string(directory.join(format!("report{number}.json")))?
             )
         }
-        _ => bail!("Usage: regtest-bridge setup | report <1|2|3> | psbt | mine"),
+        _ => bail!("Usage: regtest-bridge asm | setup | report <1|2|3> | psbt | mine"),
     }
 
     Ok(())

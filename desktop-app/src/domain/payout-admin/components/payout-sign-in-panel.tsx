@@ -122,18 +122,13 @@ export function PayoutSignInPanel({
 						</Button>
 					}
 				>
-					{!deployment && (
-						<p className="m-0 mb-1">Set params.toml, signers.toml and the Electrum server. Save loads the two files.</p>
-					)}
+					{!deployment && <p className="m-0 mb-1">Set the signers.toml path, Strata RPC URL and Electrum server.</p>}
 					<div className="text-[#0a0a0a]">
 						{deployment && (
 							<KeyValue label="Deployment">
 								{deployment.network} · {deployment.threshold} of {deployment.adminKeys.length} admins
 							</KeyValue>
 						)}
-						<KeyValue label="params.toml" mono={Boolean(config?.payoutParamsPath)}>
-							{config?.payoutParamsPath || 'Not set'}
-						</KeyValue>
 						<KeyValue label="signers.toml" mono={Boolean(config?.payoutSignersPath)}>
 							{config?.payoutSignersPath || 'Not set'}
 						</KeyValue>
@@ -148,9 +143,7 @@ export function PayoutSignInPanel({
 							</KeyValue>
 						)}
 					</div>
-					{hook.deploymentError && (
-						<Alert kind="error">params.toml / signers.toml refused: {hook.deploymentError}</Alert>
-					)}
+					{hook.deploymentError && <Alert kind="error">{hook.deploymentError}</Alert>}
 					{deployment?.warnings.map((warning) => (
 						<Alert kind="warning" key={warning}>
 							{warning}

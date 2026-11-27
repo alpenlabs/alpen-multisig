@@ -302,10 +302,6 @@ export const nodeConfigSchema = z.object({
 		.string()
 		.nullish()
 		.transform((v) => v ?? undefined),
-	payoutParamsPath: z
-		.string()
-		.nullish()
-		.transform((v) => v ?? undefined),
 	payoutSignersPath: z
 		.string()
 		.nullish()

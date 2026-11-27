@@ -22,7 +22,7 @@ If you built the kit from source, the location is `docs/payout-admin/target/payo
 ### Step 1 — Start Bitcoin Core and the App
 
 1. Open a terminal in the kit folder.
-2. Run the start script. This starts Bitcoin Core, Electrum and the app.
+2. Run the start script. This starts Bitcoin Core, Electrum, the kit’s ASM endpoint and the app.
 
    ```sh
    ./start.sh
@@ -88,7 +88,6 @@ If setup fails, run `./stop.sh` and start again from Step 1.
    - **Electrum URL:** `tcp://127.0.0.1:18501`
    - **RPC User:** `user`
    - **RPC Password:** `password`
-   - **Payout admin params.toml path:** `/tmp/payout-test/params.toml`
    - **Payout admin signers.toml path:** `/tmp/payout-test/signers.toml`
 4. Click **Save**.
 5. Click **Sign in on Ledger**.
@@ -249,7 +248,7 @@ Each `psbt` command in the next steps creates fresh coins and mines blocks.
 
 ### Step 14 — Stop Everything
 
-1. Run the following command. It stops the app, the coordinator, Bitcoin Core and Electrum. It deletes `/tmp/payout-test` and keeps the admin keys in `/tmp/payout-signers`.
+1. Run the following command. It stops the app, the coordinator, Bitcoin Core, Electrum and the kit’s ASM endpoint. It deletes `/tmp/payout-test` and keeps the admin keys in `/tmp/payout-signers`.
 
    ```sh
    ./stop.sh

@@ -192,15 +192,15 @@ export function usePayoutAdmin() {
 				setIdentity(await unwrap(api.payoutShowKey()))
 			}, 'Check the address on your Ledger…'),
 
-		loadDeployment: (params: string, signers: string) =>
+		loadDeployment: (signers: string) =>
 			run(async () => {
 				setDeployment(null)
 				setDeploymentError(null)
-				const result = await api.payoutLoadDeployment(params, signers)
+				const result = await api.payoutLoadDeployment(signers)
 
 				if (result.ok) setDeployment(result.data)
 				else setDeploymentError(result.error)
-			}, 'Loading params.toml and signers.toml…'),
+			}, 'Loading ASM history and signers.toml…'),
 
 		// Starts the Ledger at once: the sign-in review has nothing to decide on this screen, only text to compare.
 		signIn: (url: string) =>

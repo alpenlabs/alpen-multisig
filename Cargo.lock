@@ -101,6 +101,7 @@ name = "alpen-multisig-e2e-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "bitcoin",
  "bitcoind-async-client",
  "corepc-node",
@@ -1646,6 +1647,7 @@ version = "0.4.1"
 dependencies = [
  "arboard",
  "async-trait",
+ "axum",
  "bdk_bitcoind_rpc",
  "bdk_electrum",
  "bdk_wallet",
@@ -1679,6 +1681,7 @@ dependencies = [
  "strata-asm-proto-admin-txs",
  "strata-asm-proto-bridge",
  "strata-asm-proto-checkpoint",
+ "strata-asm-spec",
  "strata-crypto",
  "strata-identifiers",
  "strata-l1-envelope-fmt",
@@ -4492,11 +4495,14 @@ dependencies = [
  "musig2 0.1.1",
  "serde",
  "serde_json",
+ "ssz",
+ "strata-asm-proto-bridge-state",
  "strata-bridge-common",
  "strata-bridge-connectors",
  "strata-bridge-key-deriv",
  "strata-bridge-primitives",
  "strata-bridge-tx-graph",
+ "strata-crypto",
  "thiserror 2.0.18",
  "toml 0.8.23",
 ]

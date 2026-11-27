@@ -64,7 +64,7 @@ fn setup() -> (Fixture, Arc<Service>, Arc<FakeBlockchain>, Psbt) {
     let service = Arc::new(Service {
         public_origin: "https://test.example".into(),
         submissions: Default::default(),
-        deployment,
+        deployment: tokio::sync::watch::channel(Arc::new(deployment)).0,
         database: Arc::new(database::InMemory::default()),
         blockchain: blockchain.clone(),
         auth: Default::default(),
@@ -77,10 +77,10 @@ fn setup() -> (Fixture, Arc<Service>, Arc<FakeBlockchain>, Psbt) {
 
 fn signature_text(fixture: &Fixture, service: &Service, psbt: &Psbt, admin: usize) -> String {
     let mut psbt = psbt.clone();
-    sign_as(fixture, &service.deployment, &mut psbt, admin);
+    sign_as(fixture, &service.deployment(), &mut psbt, admin);
 
     block_payouts_tx::signatures_text(
-        &block_payouts_tx::export_signatures(&service.deployment, &psbt).unwrap(),
+        &block_payouts_tx::export_signatures(&service.deployment(), &psbt).unwrap(),
     )
 }
 
@@ -390,14 +390,14 @@ async fn partial_admin_signatures_do_not_count_and_external_broadcast_is_found()
         .map(|i| {
             block_payouts_tx::ConnectorRef::new(
                 fixture
-                    .game(&service.deployment, i)
+                    .game(&service.deployment(), i)
                     .report()
                     .new_claim_txid(),
             )
         })
         .collect();
     let mut psbt = block_payouts_tx::build_psbt(
-        &service.deployment,
+        &service.deployment(),
         &connectors,
         std::slice::from_ref(&coin),
         &change(&fixture, 90_000),
@@ -405,7 +405,7 @@ async fn partial_admin_signatures_do_not_count_and_external_broadcast_is_found()
     .unwrap();
     sign_fee(&fixture, &mut psbt, &coin, 0);
     let mut signed = psbt.clone();
-    sign_as(&fixture, &service.deployment, &mut signed, 0);
+    sign_as(&fixture, &service.deployment(), &mut signed, 0);
     psbt.inputs[0] = signed.inputs[0].clone();
     let pending_view = service
         .submit(&psbt.to_string(), SystemTime::now())
@@ -414,8 +414,8 @@ async fn partial_admin_signatures_do_not_count_and_external_broadcast_is_found()
     assert_eq!(pending_view.claim_input_count, 2);
     assert_eq!(pending_view.admins_signed, 0);
     assert!(pending_view.signed_by.is_empty());
-    sign_as(&fixture, &service.deployment, &mut signed, 1);
-    let transaction = block_payouts_tx::finalize(&service.deployment, &signed).unwrap();
+    sign_as(&fixture, &service.deployment(), &mut signed, 1);
+    let transaction = block_payouts_tx::finalize(&service.deployment(), &signed).unwrap();
     blockchain.history.lock().await.push((transaction, None));
     service.tick(SystemTime::now()).await.unwrap();
     assert_eq!(
@@ -502,7 +502,7 @@ async fn foreign_key_is_rejected() {
 async fn refresh_fetches_shared_connector_history_once() {
     let (fixture, service, blockchain, _) = setup();
     let psbt = block_payouts_tx::build_psbt(
-        &service.deployment,
+        &service.deployment(),
         &[
             block_payouts_tx::ConnectorRef::new(bitcoin::Txid::from_byte_array([41; 32])),
             block_payouts_tx::ConnectorRef::new(bitcoin::Txid::from_byte_array([42; 32])),
@@ -521,4 +521,16 @@ async fn refresh_fetches_shared_connector_history_once() {
             .load(std::sync::atomic::Ordering::Relaxed),
         2
     );
+}
+
+#[tokio::test]
+async fn failed_asm_refresh_keeps_the_previous_configuration() {
+    let (fixture, service, _, _) = setup();
+    let before = service.deployment.borrow().clone();
+    let roster = payout_admin_core::SignerRoster::from_toml(&fixture.roster_toml()).unwrap();
+    // Port 1 refuses connections, so the ASM fetch fails.
+    service
+        .refresh_deployment("http://127.0.0.1:1", &roster)
+        .await;
+    assert!(Arc::ptr_eq(&before, &service.deployment.borrow()));
 }

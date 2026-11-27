@@ -212,7 +212,7 @@ mod tests {
     fn policies_convert_for_the_device() {
         let fixture = Fixture::new(3, 2);
         let deployment = fixture.deployment();
-        let policy = policy::admin_multisig_policy(&deployment).unwrap();
+        let policy = policy::admin_multisig_policy(&deployment, deployment.covenant());
         let wallet_policy = to_ledger_policy(&policy);
         // Key 0 is the N/N key, and keys 1 through 3 are the admins in deployment order.
         assert_eq!(wallet_policy.keys.len(), 4);
@@ -225,7 +225,7 @@ mod tests {
             .all(|key| key.source.is_some()));
         assert_eq!(policy_id(&policy), wallet_policy.id());
         let wallet_policy =
-            policy::admin_wallet_policy(&deployment.signers().unwrap()[0], deployment.network());
+            policy::admin_wallet_policy(&deployment.signers()[0], deployment.network());
         assert_eq!(to_ledger_policy(&wallet_policy).keys.len(), 1);
     }
 }

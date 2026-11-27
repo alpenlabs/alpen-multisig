@@ -77,6 +77,9 @@ bdk_wallet = { workspace = true }
 bdk_electrum = { workspace = true }
 
 [dev-dependencies]
+axum = "0.7"
+strata-asm-params.workspace = true
+strata-asm-spec = { git = "https://github.com/alpenlabs/asm", rev = "7ada090580ac12af9cd411254415090725efcec1" }
 payout-admin-core = { workspace = true, features = ["test-support"] }
 # Wallet sync uses Electrum (bdk_electrum); Core RPC stays only as the regtest
 # funding/mining harness in integration tests.

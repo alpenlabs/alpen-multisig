@@ -174,7 +174,7 @@ pub async fn claim_and_contest_funded(
             .iter()
             .map(|watchtower_secret| watchtower_secret.x_only_public_key(&secp).0)
             .collect(),
-        *payout_admin_core::test_support::CONTEST_TIMELOCK,
+        payout_admin_core::test_support::CONTEST_TIMELOCK,
         Amount::from_sat(200_000),
     );
     let covenant = deployment.covenant();
@@ -257,7 +257,7 @@ fn ack_connector(
         deployment.network(),
         key,
         key,
-        deployment.nack_timelock(),
+        crate::NACK_TIMELOCK,
         Amount::ZERO,
     );
     let leaf = connector.leaf_scripts().remove(0);
@@ -319,7 +319,7 @@ pub async fn build_game_with_ack(
     )
     .await;
     let counterproof = funding.sign_send(raw.as_str().unwrap()).await;
-    let delay = deployment.nack_timelock().value();
+    let delay = crate::NACK_TIMELOCK.value();
     funding.mine(u64::from(delay).max(1)).await;
     // The ACK spends the counterproof's connector through the timeout leaf and the contest's
     // payout connector by key path, as one version 3 transaction with one taproot output.

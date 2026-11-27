@@ -232,8 +232,11 @@ impl Covenant {
 
 /// Rebuilds the witness UTXO, taproot spend data, and internal key origin from the deployment.
 /// Includes the admin key origins when a signer roster is available.
-fn fill_connector_input(deployment: &Deployment, input: &mut bitcoin::psbt::Input) {
-    let covenant = deployment.covenant();
+fn fill_connector_input(
+    deployment: &Deployment,
+    covenant: &Covenant,
+    input: &mut bitcoin::psbt::Input,
+) {
     let (leaf, leaf_hash, control_block) = covenant.to_leaf();
     input.witness_utxo = Some(covenant.connector_tx_out());
     input.tap_internal_key = Some(covenant.connector().internal_key());
@@ -242,16 +245,14 @@ fn fill_connector_input(deployment: &Deployment, input: &mut bitcoin::psbt::Inpu
     input.tap_key_origins.clear();
     input.bip32_derivation.clear();
 
-    if let Ok(signers) = deployment.signers() {
-        for signer in signers {
-            input.tap_key_origins.insert(
-                signer.xonly(),
-                (
-                    vec![leaf_hash],
-                    (signer.fingerprint(), signer.key_path(deployment.network())),
-                ),
-            );
-        }
+    for signer in deployment.signers() {
+        input.tap_key_origins.insert(
+            signer.xonly(),
+            (
+                vec![leaf_hash],
+                (signer.fingerprint(), signer.key_path(deployment.network())),
+            ),
+        );
     }
 
     let synthetic_xpub = covenant.synthetic_xpub(deployment.network());
@@ -274,6 +275,16 @@ fn bip86_script(key: XOnlyPublicKey) -> ScriptBuf {
 /// Builds a PSBT with the claim connectors first, followed by fee inputs and one change output.
 pub fn build_psbt(
     deployment: &Deployment,
+    connectors: &[ConnectorRef],
+    fees: &[FeeInput],
+    change: &ChangeOutput,
+) -> Result<Psbt, BlockPayoutsTxError> {
+    build_psbt_for_covenant(deployment, deployment.covenant(), connectors, fees, change)
+}
+
+pub fn build_psbt_for_covenant(
+    deployment: &Deployment,
+    covenant: &Covenant,
     connectors: &[ConnectorRef],
     fees: &[FeeInput],
     change: &ChangeOutput,
@@ -330,7 +341,7 @@ pub fn build_psbt(
     let mut psbt = Psbt::from_unsigned_tx(transaction)
         .map_err(|error| BlockPayoutsTxError::Psbt(error.to_string()))?;
     for input_index in 0..connectors.len() {
-        fill_connector_input(deployment, &mut psbt.inputs[input_index]);
+        fill_connector_input(deployment, covenant, &mut psbt.inputs[input_index]);
     }
     for (input, fee) in psbt.inputs[connectors.len()..].iter_mut().zip(fees) {
         fee.insert_into_psbt(input);
@@ -376,6 +387,7 @@ pub struct FeeInputInfo {
 /// Summarizes a checked PSBT's inputs, change, fee, and progress toward quorum.
 #[derive(Debug, Clone)]
 pub struct Analysis {
+    covenant: Covenant,
     block_payouts_txid: Txid,
     connector_inputs: Vec<ConnectorInputInfo>,
     fee_inputs: Vec<FeeInputInfo>,
@@ -417,6 +429,10 @@ fn ser_display<T: std::fmt::Display, S: serde::Serializer>(
 }
 
 impl Analysis {
+    pub fn covenant(&self) -> &Covenant {
+        &self.covenant
+    }
+
     /// Identifies the unsigned transaction shared by all co-signers.
     pub fn block_payouts_txid(&self) -> Txid {
         self.block_payouts_txid
@@ -680,12 +696,17 @@ pub fn analyze(deployment: &Deployment, psbt: &Psbt) -> Result<Analysis, BlockPa
 
     let prevouts = prevouts(psbt)?;
     let mut cache = SighashCache::new(transaction);
-    let leaf_hash = deployment.covenant().to_leaf().1;
+    let connectors: BTreeMap<_, _> = deployment
+        .covenants()
+        .iter()
+        .map(|entry| (entry.connector_script(), entry))
+        .collect();
+    let mut selected: Option<&Covenant> = None;
     let mut seen = BTreeSet::new();
     let mut connector_inputs = Vec::new();
     let mut fee_inputs = Vec::new();
     let mut input_total = Amount::ZERO;
-    let connector_script = deployment.covenant().connector_script();
+
     for (input_index, (transaction_input, previous_output)) in
         transaction.input.iter().zip(&prevouts).enumerate()
     {
@@ -703,7 +724,14 @@ pub fn analyze(deployment: &Deployment, psbt: &Psbt) -> Result<Analysis, BlockPa
             .checked_add(previous_output.value)
             .ok_or_else(|| shape_error("input total overflows"))?;
 
-        if previous_output.script_pubkey == connector_script {
+        if let Some(&covenant) = connectors.get(&previous_output.script_pubkey) {
+            if selected.is_some_and(|previous| previous.n_of_n() != covenant.n_of_n()) {
+                return Err(shape_error("connector inputs use different N/N keys"));
+            }
+
+            selected = Some(covenant);
+            let leaf_hash = covenant.to_leaf().1;
+
             if transaction_input.previous_output.vout != ClaimTx::ADMIN_PAYOUT_VOUT {
                 return Err(shape_error(format!(
                     "input {input_index} is a connector but not a claim's output 1"
@@ -714,7 +742,7 @@ pub fn analyze(deployment: &Deployment, psbt: &Psbt) -> Result<Analysis, BlockPa
                 return Err(shape_error("claim inputs must come before the fee inputs"));
             }
 
-            if previous_output.value != deployment.covenant().connector().value() {
+            if previous_output.value != covenant.connector().value() {
                 return Err(shape_error(format!(
                     "input {input_index} has the wrong connector value"
                 )));
@@ -772,11 +800,8 @@ pub fn analyze(deployment: &Deployment, psbt: &Psbt) -> Result<Analysis, BlockPa
         }
     }
 
-    if connector_inputs.is_empty() {
-        return Err(shape_error(
-            "no input is an admin payout connector of this deployment",
-        ));
-    }
+    let covenant = selected
+        .ok_or_else(|| shape_error("no input is an admin payout connector of this deployment"))?;
 
     if input_total < change.value {
         return Err(shape_error("the outputs exceed the inputs"));
@@ -797,6 +822,7 @@ pub fn analyze(deployment: &Deployment, psbt: &Psbt) -> Result<Analysis, BlockPa
     }
 
     Ok(Analysis {
+        covenant: covenant.clone(),
         block_payouts_txid: transaction.compute_txid(),
         signatures_needed: deployment.threshold(),
         connector_inputs,
@@ -826,19 +852,7 @@ pub fn normalize(
             .map(|(_, key, signature)| (key, signature))
             .collect();
         let input = &mut psbt.inputs[connector_input.input_index];
-        let keep_origins = input.tap_key_origins.clone();
-        fill_connector_input(deployment, input);
-
-        if deployment.signers().is_err() {
-            // Keep the origins the creator wrote when this app has no roster to rebuild them,
-            // but only for keys of this deployment.
-            for (key, origin) in keep_origins {
-                if deployment.admin_index(&key).is_some() {
-                    input.tap_key_origins.insert(key, origin);
-                }
-            }
-        }
-
+        fill_connector_input(deployment, analysis.covenant(), input);
         input.tap_script_sigs = keep;
         input.tap_key_sig = None;
         input.final_script_witness = None;
@@ -1133,7 +1147,7 @@ pub fn finalize(deployment: &Deployment, psbt: &Psbt) -> Result<Transaction, Blo
 
     let mut working_psbt = psbt.clone();
     for connector_input in &analysis.connector_inputs {
-        let covenant = deployment.covenant();
+        let covenant = analysis.covenant();
         let admin_signatures = connector_input
             .signatures(deployment, &working_psbt)
             .map(|(pubkey_index, _, signature)| AdminSignature {
@@ -1225,6 +1239,30 @@ mod tests {
                 ConnectorRef::new(fixture.game(deployment, variant).report().new_claim_txid())
             })
             .collect()
+    }
+
+    #[test]
+    fn historical_connectors_normalize_and_mixed_inputs_are_rejected() {
+        let fixture = Fixture::new(3, 2);
+        let deployment = fixture.after_operator_removal();
+        let historical = &deployment.covenants()[0];
+        let mut psbt = build_psbt_for_covenant(
+            &deployment,
+            historical,
+            &two_claims(&fixture, &deployment),
+            &[],
+            &change(&fixture, 330),
+        )
+        .unwrap();
+        let original = psbt.clone();
+        let analysis = normalize(&deployment, &mut psbt).unwrap();
+        assert_eq!(analysis.covenant().n_of_n(), historical.n_of_n());
+        assert_eq!(psbt, original);
+        fill_connector_input(&deployment, deployment.covenant(), &mut psbt.inputs[1]);
+        assert!(analyze(&deployment, &psbt)
+            .unwrap_err()
+            .to_string()
+            .contains("different N/N keys"));
     }
 
     /// The largest bundler transaction (about 90 claims) signs, merges and finalizes in seconds,
