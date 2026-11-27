@@ -4,7 +4,7 @@ use crate::application::tx_broadcaster::{
 };
 use crate::infrastructure::admin_wallet::AdminWalletError;
 use crate::infrastructure::hw_wallet::hw_psbt_signer::HwPsbtSigner;
-use crate::infrastructure::node_config_store::NodeConfig;
+use crate::infrastructure::node_config_store::{connect_electrum, NodeConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -503,7 +503,7 @@ impl WalletService {
         // the wallet lock so reads stay responsive during the sync.
         let update =
             tokio::task::spawn_blocking(move || -> Result<bdk_wallet::Update, AdminWalletError> {
-                let client = bdk_electrum::electrum_client::Client::new(&electrum_url)
+                let client = connect_electrum(&electrum_url)
                     .map_err(|e| electrum_error(&electrum_url, &e))?;
                 let client = BdkElectrumClient::new(client);
                 match request {

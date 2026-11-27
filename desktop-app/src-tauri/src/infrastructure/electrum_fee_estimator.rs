@@ -5,6 +5,7 @@
 //! `tokio::task::spawn_blocking` because the Electrum client is blocking I/O,
 //! mirroring `wallet_service.rs::do_sync`.
 
+use crate::infrastructure::node_config_store::connect_electrum;
 use async_trait::async_trait;
 
 use crate::application::fee_estimation::{FeeEstimateError, FeeEstimator, FeeSource};
@@ -47,8 +48,8 @@ impl ElectrumFeeEstimator {
     {
         let url = self.electrum_url.clone();
         tokio::task::spawn_blocking(move || {
-            let client = bdk_electrum::electrum_client::Client::new(&url)
-                .map_err(|e| FeeEstimateError::Unavailable(e.to_string()))?;
+            let client =
+                connect_electrum(&url).map_err(|e| FeeEstimateError::Unavailable(e.to_string()))?;
             f(&client)
         })
         .await

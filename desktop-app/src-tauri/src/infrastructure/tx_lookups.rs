@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use crate::infrastructure::node_config_store::connect_electrum;
 use async_trait::async_trait;
 use bdk_electrum::electrum_client::{Error as ElectrumError, GetHistoryRes};
 use bitcoin::{Transaction, Txid};
@@ -107,9 +108,9 @@ fn transaction_get_failure(e: &ElectrumError) -> Lookup {
 }
 
 fn electrum_lookup(url: &str, tracked: &TrackedTx) -> Lookup {
-    use bdk_electrum::electrum_client::{Client, ElectrumApi};
+    use bdk_electrum::electrum_client::ElectrumApi;
 
-    let Ok(client) = Client::new(url) else {
+    let Ok(client) = connect_electrum(url) else {
         return Lookup::Unanswered;
     };
     match tracked.tx.as_ref().and_then(watched_script) {

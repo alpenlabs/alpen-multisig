@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 
+use bdk_electrum::electrum_client::{Client, Error as ElectrumError};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -101,6 +102,48 @@ impl NodeConfig {
     }
 }
 
+/// Validate the original authority supplied to the Electrum client and return its socket address.
+pub fn validate_electrum_url(url: &str) -> Result<&str, &'static str> {
+    const INVALID_URL: &str =
+        "Invalid Electrum URL. Use ssl://host:port for remote servers or tcp://host:port for loopback.";
+
+    let (scheme, address) = url.split_once("://").ok_or(INVALID_URL)?;
+    let (host, port) = address.rsplit_once(':').ok_or(INVALID_URL)?;
+
+    if !port.bytes().all(|digit| digit.is_ascii_digit()) || port.parse::<u16>().is_err() {
+        return Err(INVALID_URL);
+    }
+
+    let loopback =
+        matches!(host, "127.0.0.1" | "::1" | "[::1]") || host.eq_ignore_ascii_case("localhost");
+    let hostname = host.strip_suffix('.').unwrap_or(host);
+    let valid_hostname = hostname.len() <= 253
+        && hostname.split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+
+    match scheme {
+        "tcp" if loopback => Ok(address),
+        "ssl"
+            if loopback || valid_hostname || address.parse::<std::net::SocketAddrV6>().is_ok() =>
+        {
+            Ok(address)
+        }
+        _ => Err(INVALID_URL),
+    }
+}
+
+pub(crate) fn connect_electrum(url: &str) -> Result<Client, ElectrumError> {
+    validate_electrum_url(url).map_err(|message| ElectrumError::Message(message.to_owned()))?;
+
+    Client::new(url)
+}
+
 pub struct NodeConfigState(pub Arc<RwLock<NodeConfig>>);
 
 pub fn load_node_config(app: &AppHandle) -> NodeConfig {
@@ -132,6 +175,49 @@ pub fn save_node_config(app: &AppHandle, config: &NodeConfig) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn electrum_transport_accepts_loopback_tcp_and_remote_tls() {
+        const ALLOWED: &[&str] = &[
+            LOCAL_ELECTRUM_URL,
+            "tcp://::1:50001",
+            "tcp://[::1]:50001",
+            "tcp://LOCALHOST:50001",
+            TRUSTED_ELECTRUM_URL,
+            "ssl://[2001:db8::1]:50002",
+        ];
+
+        for url in ALLOWED {
+            assert!(validate_electrum_url(url).is_ok(), "{url}");
+        }
+    }
+
+    #[test]
+    fn electrum_transport_rejects_remote_tcp_and_malformed_urls() {
+        const REJECTED: &[&str] = &[
+            "",
+            "garbage",
+            "http://localhost:50001",
+            "tcp://my-electrs:50001",
+            "tcp://localhost.example:50001",
+            "tcp://127.0.0.2:50001",
+            "tcp://[::2]:50001",
+            "ssl://:50002",
+            "ssl://server",
+            "ssl://server:",
+            "ssl://server:65536",
+            "ssl://[::1:50002",
+            "ssl://server:50002/path",
+            "ssl://user@server:50002",
+        ];
+
+        for url in REJECTED {
+            assert!(
+                validate_electrum_url(url).unwrap_err().contains("ssl://"),
+                "{url}"
+            );
+        }
+    }
 
     #[test]
     fn old_payout_settings_preserve_the_signer_file_and_rpc() {
@@ -176,12 +262,12 @@ mod tests {
             mode: ConnectionMode::Custom,
             custom_strata_rpc_url: Some("http://my-strata:9090".to_string()),
             custom_btc_rpc_url: Some("http://my-btc:8080".to_string()),
-            custom_electrum_url: Some("tcp://my-electrs:50001".to_string()),
+            custom_electrum_url: Some("ssl://my-electrs:50001".to_string()),
             ..Default::default()
         };
         assert_eq!(cfg.strata_rpc_url(), "http://my-strata:9090");
         assert_eq!(cfg.btc_rpc_url(), "http://my-btc:8080");
-        assert_eq!(cfg.electrum_url(), "tcp://my-electrs:50001");
+        assert_eq!(cfg.electrum_url(), "ssl://my-electrs:50001");
     }
 
     #[test]
