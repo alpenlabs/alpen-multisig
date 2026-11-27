@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 command -v lsof >/dev/null || { echo 'lsof is missing. Install it first.' >&2; exit 1; }
 
 running() {
-    lsof -ta -d txt ./desktop-app ./server ./bitcoind ./electrs 2>/dev/null || true
+    lsof -ta -d txt ./desktop-app ./regtest-bridge ./server ./bitcoind ./electrs 2>/dev/null || true
 }
 
 kill $(running) 2>/dev/null || true

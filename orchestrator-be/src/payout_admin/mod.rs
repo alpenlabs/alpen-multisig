@@ -39,13 +39,11 @@ fn decode(text: &str) -> Result<Psbt> {
 /// their signatures, broadcasts them at quorum and marks them expired or past.
 ///
 /// It is the payout admin state shared by the coordinator routes and the background job that runs
-/// every 30 seconds: the bridge parameters from `params.toml` (admin keys, signature threshold,
-/// NACK timelock, N/N key), record storage, the Electrum connection, sign-in sessions, and the
-/// challenge and session time-to-live settings.
+/// every 30 seconds. Holds the verified ASM history, signer roster, storage and sign-in sessions.
 pub struct Service {
     public_origin: String,
     submissions: tokio::sync::Mutex<()>,
-    deployment: Deployment,
+    deployment: tokio::sync::watch::Sender<Arc<Deployment>>,
     database: Arc<dyn Database>,
     blockchain: Arc<dyn blockchain::Blockchain>,
     auth: tokio::sync::Mutex<auth::Sessions>,
@@ -54,9 +52,13 @@ pub struct Service {
 }
 
 impl Service {
+    fn deployment(&self) -> Arc<Deployment> {
+        self.deployment.borrow().clone()
+    }
+
     fn view(&self, record: &Record) -> Result<(PendingBlockPayoutsView, Vec<OutPoint>)> {
         let analysis =
-            block_payouts_tx::analyze(&self.deployment, &decode(&record.psbt)?).map_err(bad)?;
+            block_payouts_tx::analyze(&self.deployment(), &decode(&record.psbt)?).map_err(bad)?;
         let outpoints = decode(&record.psbt)?
             .unsigned_tx
             .input
@@ -76,7 +78,7 @@ impl Service {
                 signed_by: analysis
                     .signers()
                     .iter()
-                    .map(|i| self.deployment.admin_keys()[*i])
+                    .map(|i| self.deployment().admin_keys()[*i])
                     .collect(),
                 duplicate_outpoints: vec![],
                 broadcast_error: record.broadcast_error.clone(),
@@ -135,7 +137,7 @@ impl Service {
 
     fn signed(&self, record: &mut Record, time: SystemTime) -> Result<()> {
         let analysis =
-            block_payouts_tx::analyze(&self.deployment, &decode(&record.psbt)?).map_err(bad)?;
+            block_payouts_tx::analyze(&self.deployment(), &decode(&record.psbt)?).map_err(bad)?;
 
         if record.first_signature_at.is_none()
             && analysis
@@ -151,7 +153,7 @@ impl Service {
     }
 
     async fn submit(&self, text: &str, time: SystemTime) -> Result<PendingBlockPayoutsView> {
-        let incoming = block_payouts_tx::import_psbt(&self.deployment, text).map_err(bad)?;
+        let incoming = block_payouts_tx::import_psbt(&self.deployment(), text).map_err(bad)?;
         let id = incoming.unsigned_tx.compute_txid().to_string();
         let submission = self.submissions.lock().await;
         for _ in 0..8 {
@@ -159,7 +161,7 @@ impl Service {
             let existing = records.iter().find(|record| record.txid == id).cloned();
             if existing.is_none() {
                 let analysis =
-                    block_payouts_tx::analyze(&self.deployment, &incoming).map_err(bad)?;
+                    block_payouts_tx::analyze(&self.deployment(), &incoming).map_err(bad)?;
                 let fees: std::collections::HashSet<_> = analysis
                     .fee_inputs()
                     .iter()
@@ -212,7 +214,7 @@ impl Service {
             }
 
             let added =
-                block_payouts_tx::merge(&self.deployment, &mut psbt, &incoming).map_err(bad)?;
+                block_payouts_tx::merge(&self.deployment(), &mut psbt, &incoming).map_err(bad)?;
             record.psbt = psbt.to_string();
             record.version += 1;
             self.signed(&mut record, time)?;
@@ -246,7 +248,7 @@ impl Service {
             }
 
             let mut psbt = decode(&record.psbt)?;
-            let outcome = block_payouts_tx::paste_signatures(&self.deployment, &mut psbt, text);
+            let outcome = block_payouts_tx::paste_signatures(&self.deployment(), &mut psbt, text);
             record.psbt = psbt.to_string();
             let version = record.version;
             record.version += 1;
@@ -270,6 +272,18 @@ impl Service {
         }
 
         Err(AppError::Conflict("payout changed; retry".into()))
+    }
+
+    /// Reloads the N/N history from ASM. A failed reload keeps the previous configuration.
+    async fn refresh_deployment(&self, url: &str, roster: &payout_admin_core::SignerRoster) {
+        match fetch_deployment(url, roster).await {
+            Ok(deployment) => {
+                self.deployment.send_replace(Arc::new(deployment));
+            }
+            Err(error) => {
+                tracing::warn!(%error, "ASM refresh failed; keeping previous payout configuration")
+            }
+        }
     }
 
     async fn refresh(&self, record: Record, time: SystemTime) -> Result<()> {
@@ -360,11 +374,11 @@ impl Service {
             past.block_time = None;
         } else if record.expires_at <= time {
             return self.database.delete(&record).await;
-        } else if block_payouts_tx::analyze(&self.deployment, &psbt)
+        } else if block_payouts_tx::analyze(&self.deployment(), &psbt)
             .map_err(bad)?
             .has_quorum()
         {
-            let result = match block_payouts_tx::finalize(&self.deployment, &psbt).map_err(bad) {
+            let result = match block_payouts_tx::finalize(&self.deployment(), &psbt).map_err(bad) {
                 Ok(transaction) => self
                     .blockchain
                     .broadcast(transaction.clone())
@@ -408,15 +422,49 @@ impl Service {
     }
 }
 
+/// How often the coordinator tries ASM at startup before it refuses to start.
+const STARTUP_ASM_ATTEMPTS: u32 = 5;
+
+/// Pause between startup attempts to reach ASM.
+const STARTUP_ASM_RETRY_DELAY: Duration = Duration::from_secs(2);
+
+async fn fetch_deployment(
+    url: &str,
+    roster: &payout_admin_core::SignerRoster,
+) -> anyhow::Result<Deployment> {
+    use crate::infrastructure::asm_rpc::{decode_bridge_state, fetch_anchor_state};
+    let anchor = fetch_anchor_state(url).await.map_err(anyhow::Error::msg)?;
+    let bridge = decode_bridge_state(&anchor).map_err(anyhow::Error::msg)?;
+
+    Ok(Deployment::load(roster, bridge.operators())?)
+}
+
 /// Starts the payout routes and refresh worker when bridge parameters are configured.
 pub async fn router(
     config: &crate::config::Config,
     pool: Option<sqlx::PgPool>,
 ) -> anyhow::Result<axum::Router> {
-    let Some(path) = &config.payout_params_path else {
+    let Some(path) = &config.payout_signers_path else {
         return Ok(axum::Router::new());
     };
-    let deployment = Deployment::from_params_toml(&std::fs::read_to_string(path)?)?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| anyhow::anyhow!("cannot read signers.toml at {path}: {error}"))?;
+    let roster = payout_admin_core::SignerRoster::from_toml(&text)?;
+    let url = config.strata_admin_state_rpc_url.clone();
+    let mut attempt = 1;
+    let deployment = loop {
+        match fetch_deployment(&url, &roster).await {
+            Ok(deployment) => break deployment,
+            Err(error) if attempt < STARTUP_ASM_ATTEMPTS => {
+                tracing::warn!(%error, attempt, "Cannot load payout configuration from ASM; retrying");
+                tokio::time::sleep(STARTUP_ASM_RETRY_DELAY).await;
+                attempt += 1;
+            }
+            Err(error) => {
+                return Err(error.context("cannot load payout configuration from ASM"));
+            }
+        }
+    };
     let database: Arc<dyn Database> = match pool {
         Some(pool) => Arc::new(database::Postgres(pool)),
         None => Arc::new(database::InMemory::default()),
@@ -433,7 +481,7 @@ pub async fn router(
     let service = Arc::new(Service {
         public_origin: public_url.origin().ascii_serialization(),
         submissions: Default::default(),
-        deployment,
+        deployment: tokio::sync::watch::channel(Arc::new(deployment)).0,
         database,
         blockchain: Arc::new(blockchain::Electrum::new(&config.payout_electrum_url)),
         auth: Default::default(),
@@ -445,6 +493,8 @@ pub async fn router(
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             interval.tick().await;
+
+            worker.refresh_deployment(&url, &roster).await;
 
             if let Err(error) = worker.tick(SystemTime::now()).await {
                 tracing::warn!(error = %error, "payout worker failed");

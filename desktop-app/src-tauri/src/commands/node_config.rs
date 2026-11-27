@@ -21,8 +21,6 @@ pub struct NodeConfigDto {
     #[serde(default)]
     pub custom_orchestrator_url: Option<String>,
     #[serde(default)]
-    pub payout_params_path: Option<std::path::PathBuf>,
-    #[serde(default)]
     pub payout_signers_path: Option<std::path::PathBuf>,
 }
 
@@ -70,7 +68,6 @@ pub async fn get_node_config(state: State<'_, NodeConfigState>) -> Result<NodeCo
         custom_btc_rpc_pass: cfg.custom_btc_rpc_pass,
         custom_electrum_url: cfg.custom_electrum_url,
         custom_orchestrator_url: cfg.custom_orchestrator_url,
-        payout_params_path: cfg.payout_params_path,
         payout_signers_path: cfg.payout_signers_path,
     })
 }
@@ -89,7 +86,6 @@ pub async fn save_node_config(
         custom_btc_rpc_pass: config.custom_btc_rpc_pass,
         custom_electrum_url: config.custom_electrum_url,
         custom_orchestrator_url: config.custom_orchestrator_url,
-        payout_params_path: config.payout_params_path,
         payout_signers_path: config.payout_signers_path,
     };
     node_config_store::save_node_config(&app, &new_config)?;
@@ -111,7 +107,6 @@ pub async fn check_local_node(
         custom_btc_rpc_pass: config.custom_btc_rpc_pass,
         custom_electrum_url: config.custom_electrum_url,
         custom_orchestrator_url: config.custom_orchestrator_url,
-        payout_params_path: config.payout_params_path,
         payout_signers_path: config.payout_signers_path,
     };
 

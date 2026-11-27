@@ -326,12 +326,17 @@ impl Serialize for ReportVerdict {
 /// Pairs the submitted report with its verification result, including the reason when skipped or rejected.
 #[derive(Debug, Clone)]
 pub struct VerifiedReport {
+    key: Option<bitcoin::secp256k1::PublicKey>,
     report: Report,
     verdict: ReportVerdict,
     new_claim_height: Option<u64>,
 }
 
 impl VerifiedReport {
+    pub fn n_of_n(&self) -> Option<bitcoin::secp256k1::PublicKey> {
+        self.key
+    }
+
     /// The decision on blocking this claim and any reason it was skipped or rejected.
     pub fn verdict(&self) -> &ReportVerdict {
         &self.verdict
@@ -464,14 +469,16 @@ fn check_contest_spends_claim<'a>(
         format!("The {which} contest did not spend the claim through a contest leaf (N/N + watchtower).")
     })?;
 
-    if n_of_n != deployment.covenant().n_of_n_xonly() {
-        return Err(format!(
-            "The {which} claim's contest connector uses N/N key {n_of_n}, which is not derived from \
-             the trusted params.toml."
-        ));
-    }
-
-    Ok(deployment.covenant())
+    deployment
+        .covenants()
+        .iter()
+        .find(|covenant| covenant.n_of_n_xonly() == n_of_n)
+        .ok_or_else(|| {
+            format!(
+                "The {which} claim's contest connector uses N/N key {n_of_n}, which is absent from \
+                 ASM history."
+            )
+        })
 }
 
 fn spends(transaction: &Transaction, outpoint: OutPoint) -> bool {
@@ -527,6 +534,7 @@ pub fn verify_report(
     connector: Option<ConnectorState>,
 ) -> VerifiedReport {
     let mut verified_report = VerifiedReport {
+        key: None,
         report: report.clone(),
         verdict: ReportVerdict::Valid,
         new_claim_height: None,
@@ -652,6 +660,8 @@ fn check(
         ));
     }
 
+    verified_report.key = Some(new_covenant.n_of_n());
+
     Ok(())
 }
 
@@ -702,7 +712,7 @@ mod tests {
 
     fn setup() -> (Fixture, Deployment, GameTxs) {
         let fixture = Fixture::new(3, 2);
-        let deployment = Deployment::from_params_toml(&fixture.params_toml()).unwrap();
+        let deployment = fixture.deployment();
         let game = fixture.game(&deployment, 0);
 
         (fixture, deployment, game)
@@ -790,15 +800,49 @@ mod tests {
     }
 
     #[test]
+    fn acked_claim_can_use_an_older_key() {
+        let fixture = Fixture::new(3, 2);
+        let deployment = fixture.after_operator_removal();
+        let current = deployment.covenant().n_of_n();
+        let old = deployment.covenants()[0].n_of_n();
+        assert_ne!(old, current);
+        let game = GameTxs::build(&fixture, &deployment, 0, old, current);
+        let checked = verify_report(&deployment, &game.report(), &game.lookup(), None);
+        assert_eq!(checked.verdict(), &ReportVerdict::Valid);
+        assert_eq!(checked.n_of_n(), Some(current));
+    }
+
+    #[test]
     fn an_untrusted_n_of_n_is_rejected() {
         let (fixture, deployment, _) = setup();
-        // The same game built with an N/N key that params.toml does not derive.
+        // The same game built with an N/N key absent from the ASM history.
         let game = fixture.game_with_n_of_n(&deployment, 0, fixture.foreign_n_of_n());
         let verified_report = verify_report(&deployment, &game.report(), &game.lookup(), None);
         assert!(
             verified_report
                 .invalid_reason()
-                .contains("not derived from"),
+                .contains("absent from ASM history"),
+            "{:?}",
+            verified_report.verdict
+        );
+    }
+
+    #[test]
+    fn an_acked_claim_under_an_untrusted_n_of_n_is_rejected() {
+        let (fixture, deployment, _) = setup();
+        // Only the acked game uses a key absent from the ASM history; the new claim is trusted.
+        let game = GameTxs::build(
+            &fixture,
+            &deployment,
+            0,
+            fixture.foreign_n_of_n(),
+            deployment.covenant().n_of_n(),
+        );
+        let verified_report = verify_report(&deployment, &game.report(), &game.lookup(), None);
+        assert!(
+            verified_report
+                .invalid_reason()
+                .contains("The acked claim's contest connector uses N/N key"),
             "{:?}",
             verified_report.verdict
         );

@@ -32,24 +32,27 @@ commands! {
     payout_admin_confirm_transaction(review_id: String) -> wire::PasteSignaturesView => sign_block_payouts_tx(review_id, true);
 }
 
-/// Loads the bridge parameters and signer roster, then saves their paths in the desktop node settings.
+/// Loads ASM history and the signer roster, then saves the roster path in the desktop node settings.
 #[tauri::command]
 pub async fn payout_admin_load_deployment(
-    params_path: std::path::PathBuf,
     signers_path: std::path::PathBuf,
     state: tauri::State<'_, PayoutAdminState>,
     config: tauri::State<'_, desktop_app::infrastructure::node_config_store::NodeConfigState>,
     app: tauri::AppHandle,
 ) -> Result<Value, String> {
-    let result = state
-        .load_deployment(params_path.clone(), signers_path.clone())
-        .await?;
+    let result = state.load_deployment(signers_path.clone()).await?;
     let mut settings = config.0.write().map_err(|error| error.to_string())?;
     let mut next = settings.clone();
-    next.payout_params_path = Some(params_path);
     next.payout_signers_path = Some(signers_path);
     desktop_app::infrastructure::node_config_store::save_node_config(&app, &next)?;
     *settings = next;
 
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn payout_admin_check_asm(
+    state: tauri::State<'_, PayoutAdminState>,
+) -> Result<(), String> {
+    state.check_asm().await
 }

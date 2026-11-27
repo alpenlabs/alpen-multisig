@@ -10,6 +10,8 @@
 
 ## Trust boundaries
 
+The configured ASM endpoint is trusted for the N/N key history used to verify false-claim reports.
+
 ```mermaid
 flowchart LR
   React[React webview]

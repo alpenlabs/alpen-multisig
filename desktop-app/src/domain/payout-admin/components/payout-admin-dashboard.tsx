@@ -99,7 +99,7 @@ export function PayoutAdminDashboard({ hook }: { hook: PayoutAdminHook }) {
 
 			{activeTab === 'pending' && 0 < hook.hidden && (
 				<Alert kind="warning">
-					{hook.hidden} pending block payouts transaction(s) do not match your params.toml and are hidden.
+					{hook.hidden} pending block payouts transaction(s) do not match your payout configuration and are hidden.
 				</Alert>
 			)}
 			{/* Tab content */}

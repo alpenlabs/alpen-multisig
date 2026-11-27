@@ -1,15 +1,4 @@
-//! The trusted deployment: strata-bridge `params.toml` plus the Payout Administrator signer roster.
-//!
-//! `params.toml` is the bridge's consensus parameter file. From it come:
-//!
-//! - the admin multisig: `[keys.admin] pubkeys` (x-only, in order) and `threshold`;
-//! - the operator schedule, whose latest activation or deactivation height selects the active
-//!   operator set. Its aggregate N/N key and the admin set define the payout connector.
-//!
-//! The bridge file holds only x-only admin keys. A Ledger needs every cosigner's account xpub to
-//! register the admin multisig policy, so a separate [`SignerRoster`] lists them, and
-//! [`Deployment::with_roster`] checks that each `xpub/0/0` is exactly the admin key at the same
-//! position in `params.toml`. The roster can therefore add no key of its own.
+//! Trusted payout signer roster and verified ASM operator history.
 
 use std::{collections::BTreeSet, str::FromStr};
 
@@ -21,7 +10,7 @@ use bitcoin::{
 };
 use musig2::KeyAggContext;
 use serde::{Deserialize, Serialize};
-use strata_bridge_common::params::Params;
+use strata_asm_proto_bridge_state::operator::{build_nn_script, OperatorTable};
 use strata_bridge_connectors::{prelude::ClaimAdminPayoutConnector, Connector};
 
 /// BIP-328 chain code of MuSig2 synthetic xpubs (the bridge's `key-deriv` crate uses the same).
@@ -33,11 +22,11 @@ pub const BIP328_CHAIN_CODE: [u8; 32] = [
 /// Ledger Bitcoin app limit on `multi_a` keys.
 pub const LEDGER_MAX_MULTI_A_KEYS: usize = 16;
 
-/// Identifies whether deployment setup failed on bridge parameters or signer roster data.
+/// Identifies whether deployment setup failed on ASM history or signer roster data.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DeploymentError {
-    #[error("params.toml: {0}")]
-    Params(String),
+    #[error("ASM N/N history: {0}")]
+    History(String),
     #[error("signer roster: {0}")]
     Roster(String),
 }
@@ -105,10 +94,10 @@ pub fn synthetic_xpub(aggregate: PublicKey, network: Network) -> Xpub {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSigner {
-    /// Position in `[keys.admin].pubkeys`.
+    /// Position in the signer roster.
     index: usize,
     label: String,
-    /// The admin key as in `params.toml` (`account_xpub/0/0`).
+    /// The admin signing key (`account_xpub/0/0`).
     #[serde(serialize_with = "ser_xonly")]
     xonly: XOnlyPublicKey,
     #[serde(serialize_with = "ser_display")]
@@ -175,7 +164,7 @@ fn ser_display<T: std::fmt::Display, S: serde::Serializer>(
 
 /// The Payout Administrator account: `m/86'/0'/73'` on mainnet, `m/86'/1'/73'` elsewhere (the
 /// Ledger Bitcoin Test app only derives coin type 1'). This is also the Admin Wallet account, so
-/// `account/0/0` — the admin key in `params.toml` — is the Admin Wallet's first receive key.
+/// `account/0/0` — the admin signing key — is the Admin Wallet's first receive key.
 pub fn account_path(network: Network) -> DerivationPath {
     let coin = if network == Network::Bitcoin { 0 } else { 1 };
 
@@ -210,6 +199,7 @@ pub fn xonly_at_0_0(xpub: &Xpub) -> Result<XOnlyPublicKey, bitcoin::bip32::Error
 ///
 /// ```toml
 /// network = "regtest"
+/// threshold = 1
 ///
 /// [[admins]]
 /// label = "Admin A"
@@ -217,12 +207,13 @@ pub fn xonly_at_0_0(xpub: &Xpub) -> Result<XOnlyPublicKey, bitcoin::bip32::Error
 /// xpub = "tpubDC..."   # account m/86'/1'/73' (m/86'/0'/73' on mainnet)
 /// ```
 ///
-/// Admins are listed in the order of `[keys.admin].pubkeys`.
+/// Admins are listed in connector script order.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignerRoster {
-    #[serde(default, deserialize_with = "roster_network")]
-    network: Option<Network>,
+    #[serde(deserialize_with = "roster_network")]
+    network: Network,
+    threshold: usize,
     admins: Vec<RosterEntry>,
 }
 
@@ -235,14 +226,10 @@ pub struct RosterEntry {
     xpub: Xpub,
 }
 
-fn roster_network<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Network>, D::Error> {
+fn roster_network<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Network, D::Error> {
     let network = Network::deserialize(deserializer)?;
     match network {
-        Network::Bitcoin | Network::Testnet | Network::Signet | Network::Regtest => {
-            Ok(Some(network))
-        }
+        Network::Bitcoin | Network::Testnet | Network::Signet | Network::Regtest => Ok(network),
         _ => Err(serde::de::Error::custom(format!(
             "unsupported roster network {network}"
         ))),
@@ -250,7 +237,7 @@ fn roster_network<'de, D: serde::Deserializer<'de>>(
 }
 
 impl SignerRoster {
-    /// Decodes the signer file. Matching its entries to the deployment requires `Deployment::with_roster`.
+    /// Decodes the signer file. The roster sets the network, threshold and admin key order.
     pub fn from_toml(text: &str) -> Result<Self, DeploymentError> {
         toml::from_str(text).map_err(|error| DeploymentError::Roster(error.to_string()))
     }
@@ -258,23 +245,19 @@ impl SignerRoster {
 
 // ── Deployment ────────────────────────────────────────────────────────────────
 
-/// Bridge parameters used to verify claims and build payouts, optionally paired with signer account keys.
+/// Trusted signer roster and connectors derived from ASM history.
 #[derive(Debug, Clone)]
 pub struct Deployment {
-    nack_timelock: bitcoin::relative::Height,
     admin_keys: Vec<XOnlyPublicKey>,
     threshold: usize,
-    /// Only the operator set active at the newest activation/deactivation height in
-    /// params.toml is supported. Claims from earlier sets cannot be verified or blocked.
-    covenant: Covenant,
-    /// Present once [`Self::with_roster`] succeeded.
-    signers: Option<Vec<AdminSigner>>,
+    covenants: Vec<Covenant>,
+    signers: Vec<AdminSigner>,
     /// Non-fatal findings to show the user.
     warnings: Vec<String>,
 }
 
 impl Deployment {
-    /// Nonfatal findings from loading the bridge parameters.
+    /// Nonfatal findings from loading the signer roster.
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
@@ -284,19 +267,21 @@ impl Deployment {
         &self.admin_keys
     }
 
-    /// The covenant derived at the newest operator schedule height.
+    /// The covenant for the latest ASM history entry.
     pub fn covenant(&self) -> &Covenant {
-        &self.covenant
+        self.covenants
+            .last()
+            .expect("validated nonempty ASM history")
     }
 
-    /// Relative delay in blocks used to reconstruct the counterproof timeout leaf.
-    pub fn nack_timelock(&self) -> bitcoin::relative::Height {
-        self.nack_timelock
+    /// Every covenant in ASM's N/N history, oldest first.
+    pub fn covenants(&self) -> &[Covenant] {
+        &self.covenants
     }
 
     /// The Bitcoin network configured for the payout connector.
     pub fn network(&self) -> Network {
-        self.covenant.connector.network()
+        self.covenant().connector.network()
     }
 
     /// Number of admin signatures required per connector input.
@@ -304,93 +289,32 @@ impl Deployment {
         self.threshold
     }
 
-    /// Parses `params.toml` with the bridge's own parser and derives the newest operator set.
-    pub fn from_params_toml(text: &str) -> Result<Self, DeploymentError> {
-        let params: Params =
-            toml::from_str(text).map_err(|error| DeploymentError::Params(error.to_string()))?;
-
-        Self::from_params(&params)
-    }
-
-    /// Builds the payout connector for the operators active at the newest scheduled height.
-    pub fn from_params(params: &Params) -> Result<Self, DeploymentError> {
-        let network = params.network;
-        let admin_keys = params.keys.admin.pubkeys.clone();
-        let threshold = params.keys.admin.threshold;
+    /// Constructs connectors for every verified entry using roster order for the admin leaf.
+    pub fn load(roster: &SignerRoster, operators: &OperatorTable) -> Result<Self, DeploymentError> {
+        let roster_error = DeploymentError::Roster;
+        let network = roster.network;
+        let threshold = roster.threshold;
         let mut warnings = Vec::new();
+        let mut admin_keys = Vec::new();
 
-        if admin_keys.len() > LEDGER_MAX_MULTI_A_KEYS {
+        if threshold == 0 || roster.admins.len() < threshold {
+            return Err(roster_error(
+                "threshold must be between 1 and the number of admins".into(),
+            ));
+        }
+
+        if LEDGER_MAX_MULTI_A_KEYS < roster.admins.len() {
             warnings.push(format!(
                 "A Ledger cannot sign multi_a with more than {LEDGER_MAX_MULTI_A_KEYS} keys; this \
                  admin set has {}.",
-                admin_keys.len()
+                roster.admins.len()
             ));
         }
 
-        let schedule = &params.keys.operators;
-        let height = schedule
-            .iter()
-            .flat_map(|operator| {
-                std::iter::once(operator.activation_height()).chain(operator.deactivation_height())
-            })
-            .max()
-            .ok_or_else(|| DeploymentError::Params("empty operator schedule".into()))?;
-        let active: Vec<_> = schedule.active_at(height).collect();
-
-        if active.is_empty() {
-            return Err(DeploymentError::Params(
-                "no active operators at the newest schedule height".into(),
-            ));
-        }
-
-        let keys: Vec<PublicKey> = active
-            .iter()
-            .map(|operator| operator.covenant_public_key())
-            .collect();
-        let n_of_n: PublicKey = KeyAggContext::new(keys)
-            .map_err(|error| {
-                DeploymentError::Params(format!("N/N key aggregation failed: {error}"))
-            })?
-            .aggregated_pubkey();
-        let connector =
-            ClaimAdminPayoutConnector::new(network, n_of_n, admin_keys.clone(), threshold);
-        let covenant = Covenant { n_of_n, connector };
-
-        Ok(Self {
-            nack_timelock: bitcoin::relative::Height::from_height(params.protocol.nack_timelock),
-            admin_keys,
-            threshold,
-            covenant,
-            signers: None,
-            warnings,
-        })
-    }
-
-    /// Attaches the signer roster after checking it against `params.toml`.
-    pub fn with_roster(mut self, roster: &SignerRoster) -> Result<Self, DeploymentError> {
-        let roster_error = DeploymentError::Roster;
-
-        if let Some(parsed) = roster.network {
-            if parsed != self.network() {
-                return Err(roster_error(format!(
-                    "roster is for {parsed}, params.toml is for {}",
-                    self.network()
-                )));
-            }
-        }
-
-        if roster.admins.len() != self.admin_keys.len() {
-            return Err(roster_error(format!(
-                "lists {} admins, params.toml has {}",
-                roster.admins.len(),
-                self.admin_keys.len()
-            )));
-        }
-
-        let want_kind = NetworkKind::from(self.network());
+        let want_kind = NetworkKind::from(network);
         let mut fingerprints = BTreeSet::new();
         let mut signers = Vec::with_capacity(roster.admins.len());
-        for (index, (entry, &expected)) in roster.admins.iter().zip(&self.admin_keys).enumerate() {
+        for (index, entry) in roster.admins.iter().enumerate() {
             let at = format!("admin {index} ({})", entry.label);
 
             if entry.label.trim().is_empty() {
@@ -414,7 +338,7 @@ impl Deployment {
             if xpub.depth != 3 {
                 return Err(roster_error(format!(
                     "{at}: xpub must be the account key at {} (depth 3), got depth {}",
-                    account_path(self.network()),
+                    account_path(network),
                     xpub.depth
                 )));
             }
@@ -422,14 +346,14 @@ impl Deployment {
             let derived =
                 xonly_at_0_0(&xpub).map_err(|error| roster_error(format!("{at}: {error}")))?;
 
-            if derived != expected {
-                return Err(roster_error(format!(
-                    "{at}: xpub/0/0 is {derived}, but params.toml lists {expected} at this position"
-                )));
+            if admin_keys.contains(&derived) {
+                return Err(roster_error(format!("{at}: duplicate admin key {derived}")));
             }
 
+            admin_keys.push(derived);
+
             if !fingerprints.insert(fingerprint) {
-                self.warnings.push(format!(
+                warnings.push(format!(
                     "Two admins share master fingerprint {fingerprint}: they would be the same \
                      signing device."
                 ));
@@ -438,30 +362,73 @@ impl Deployment {
             signers.push(AdminSigner {
                 index,
                 label: entry.label.trim().to_string(),
-                xonly: expected,
+                xonly: derived,
                 fingerprint,
                 account_xpub: xpub,
             });
         }
-        self.signers = Some(signers);
+        let covenants = Self::history_keys(operators)?
+            .into_iter()
+            .map(|n_of_n| {
+                let connector =
+                    ClaimAdminPayoutConnector::new(network, n_of_n, admin_keys.clone(), threshold);
+                Covenant { n_of_n, connector }
+            })
+            .collect();
 
-        Ok(self)
-    }
-
-    /// Parses the bridge parameters and checks the signer roster against them when supplied.
-    pub fn load(params_toml: &str, roster_toml: Option<&str>) -> Result<Self, DeploymentError> {
-        let deployment = Self::from_params_toml(params_toml)?;
-        match roster_toml {
-            Some(roster_text) => deployment.with_roster(&SignerRoster::from_toml(roster_text)?),
-            None => Ok(deployment),
-        }
-    }
-
-    /// Returns the checked signers in admin-key order, or an error if no roster is loaded.
-    pub fn signers(&self) -> Result<&[AdminSigner], DeploymentError> {
-        self.signers.as_deref().ok_or_else(|| {
-            DeploymentError::Roster("no signer roster is loaded (the account xpubs)".into())
+        Ok(Self {
+            admin_keys,
+            threshold,
+            signers,
+            warnings,
+            covenants,
         })
+    }
+
+    /// Rebuilds the full N/N key of every ASM history entry and checks it against the entry's
+    /// recorded script.
+    pub fn history_keys(operators: &OperatorTable) -> Result<Vec<PublicKey>, DeploymentError> {
+        let history_error = DeploymentError::History;
+        let mut keys_in_history = Vec::new();
+
+        for entry in operators.historical_nn_scripts() {
+            let keys = entry
+                .operators()
+                .active_indices()
+                .map(|index| {
+                    operators
+                        .get_operator(index)
+                        .map(|operator| PublicKey::from(*operator.musig2_pk()))
+                        .ok_or_else(|| history_error(format!("unknown operator index {index}")))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            if keys.is_empty() {
+                return Err(history_error("empty operator bitmap".into()));
+            }
+
+            let n_of_n: PublicKey = KeyAggContext::new(keys)
+                .map_err(|error| history_error(error.to_string()))?
+                .aggregated_pubkey();
+
+            if build_nn_script(&n_of_n.x_only_public_key().0.into()).inner() != entry.script() {
+                return Err(history_error(
+                    "operator bitmap does not match the recorded script".into(),
+                ));
+            }
+
+            keys_in_history.push(n_of_n);
+        }
+
+        if keys_in_history.is_empty() {
+            return Err(history_error("empty history".into()));
+        }
+
+        Ok(keys_in_history)
+    }
+
+    pub fn signers(&self) -> &[AdminSigner] {
+        &self.signers
     }
 
     /// Finds the key's zero-based position in the deployment's ordered admin set.
@@ -471,7 +438,7 @@ impl Deployment {
             .position(|admin_key| admin_key == key)
     }
 
-    /// Hashes the network, threshold, ordered admin keys, and full N/N key with SHA-256.
+    /// Hashes the network, threshold, ordered admin keys, and full N/N key history with SHA-256.
     /// The desktop returns the hex digest when it loads the deployment.
     pub fn digest(&self) -> sha256::Hash {
         let mut canonical = format!("{}|{}|", self.network(), self.threshold);
@@ -480,7 +447,9 @@ impl Deployment {
             canonical.push(',');
         }
         canonical.push('|');
-        canonical.push_str(&hex::encode(self.covenant.n_of_n.serialize()));
+        for covenant in &self.covenants {
+            canonical.push_str(&hex::encode(covenant.n_of_n.serialize()));
+        }
 
         sha256::Hash::hash(canonical.as_bytes())
     }
@@ -493,16 +462,62 @@ mod tests {
     use strata_bridge_key_deriv::key_agg::derive_musig_0_0;
 
     #[test]
-    fn loads_the_bridge_docker_params() {
-        let deployment = Deployment::from_params_toml(DOCKER_PARAMS).unwrap();
-        assert_eq!(deployment.network(), Network::Regtest);
-        assert_eq!(deployment.threshold(), 2);
-        assert_eq!(deployment.admin_keys().len(), 3);
+    fn asm_history_matches_full_bridge_aggregate_and_script() {
+        use strata_asm_proto_bridge_state::operator::{build_nn_script, OperatorTable};
+        use strata_crypto::EvenPublicKey;
+
+        let params: strata_bridge_common::params::Params = toml::from_str(DOCKER_PARAMS).unwrap();
+        let schedule = &params.keys.operators;
+        let operators: Vec<_> = schedule
+            .active_at(101)
+            .map(|operator| EvenPublicKey::from(operator.covenant_public_key()))
+            .collect();
+        let mut table = OperatorTable::from_operator_list(&operators);
+        let entry = table.historical_nn_scripts().next().unwrap();
+        let selected = entry
+            .operators()
+            .active_indices()
+            .map(|index| PublicKey::from(*table.get_operator(index).unwrap().musig2_pk()));
+        let full_key: PublicKey = KeyAggContext::new(selected).unwrap().aggregated_pubkey();
+        let bridge_key: PublicKey = KeyAggContext::new(
+            schedule
+                .active_at(101)
+                .map(|operator| operator.covenant_public_key()),
+        )
+        .unwrap()
+        .aggregated_pubkey();
+
+        assert_eq!(full_key, bridge_key);
+        let deployment = Deployment::load(
+            &SignerRoster::from_toml(&Fixture::new(3, 2).roster_toml()).unwrap(),
+            &table,
+        )
+        .unwrap();
+        assert_eq!(deployment.covenant().n_of_n(), bridge_key);
+        assert_eq!(
+            build_nn_script(&full_key.x_only_public_key().0.into()).inner(),
+            entry.script()
+        );
+
+        // Remove the middle index, leaving a gap in the active bitmap.
+        table.apply_membership_changes(&[], &[1]);
+        let remaining: PublicKey = KeyAggContext::new(
+            schedule
+                .active_at(101)
+                .filter(|operator| operator.index() != 1)
+                .map(|operator| operator.covenant_public_key()),
+        )
+        .unwrap()
+        .aggregated_pubkey();
+        assert_eq!(
+            Deployment::history_keys(&table).unwrap(),
+            [bridge_key, remaining]
+        );
     }
 
     #[test]
     fn synthetic_xpub_0_0_is_the_bridge_internal_key() {
-        let deployment = Deployment::from_params_toml(DOCKER_PARAMS).unwrap();
+        let deployment = Fixture::new(3, 2).deployment();
         let covenant = deployment.covenant();
         let secp = bitcoin::secp256k1::Secp256k1::verification_only();
         let child = covenant
@@ -524,40 +539,93 @@ mod tests {
     }
 
     #[test]
-    fn roster_must_match_params_keys() {
-        let fixture = Fixture::new(3, 2);
-        let deployment =
-            Deployment::load(&fixture.params_toml(), Some(&fixture.roster_toml())).unwrap();
-        let signers = deployment.signers().unwrap();
-        assert_eq!(signers.len(), 3);
-        assert_eq!(signers[1].xonly(), fixture.admin_xonly(1));
-
-        // Swapping two admins puts each xpub at the wrong position.
-        let swapped = fixture.roster_toml_with_order(&[1, 0, 2]);
-        let error = Deployment::load(&fixture.params_toml(), Some(&swapped)).unwrap_err();
-        assert!(error.to_string().contains("xpub/0/0"), "{error}");
-
-        // A roster with an admin missing.
-        let short = fixture.roster_toml_with_order(&[0, 1]);
-        let error = Deployment::load(&fixture.params_toml(), Some(&short)).unwrap_err();
-        assert!(error.to_string().contains("lists 2 admins"), "{error}");
+    fn mismatched_asm_script_is_rejected() {
+        use ssz::{Decode, Encode};
+        let table = Fixture::new(3, 2).operator_table();
+        let script = table
+            .historical_nn_scripts()
+            .next()
+            .unwrap()
+            .script()
+            .as_bytes();
+        let mut bytes = table.as_ssz_bytes();
+        let offset = bytes
+            .windows(script.len())
+            .position(|window| window == script)
+            .unwrap();
+        bytes[offset] ^= 1;
+        let inconsistent = OperatorTable::from_ssz_bytes(&bytes).unwrap();
+        assert!(Deployment::history_keys(&inconsistent)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
     }
 
     #[test]
-    fn roster_rejects_wrong_network() {
-        let fixture = Fixture::new(2, 2);
-        let roster = fixture
-            .roster_toml()
-            .replace("network = \"regtest\"", "network = \"bitcoin\"");
-        let error = Deployment::load(&fixture.params_toml(), Some(&roster)).unwrap_err();
-        assert!(error.to_string().contains("roster is for"), "{error}");
+    fn roster_requires_network_and_valid_threshold() {
+        let fixture = Fixture::new(3, 2);
+        let text = fixture.roster_toml();
+        for required in ["network", "threshold"] {
+            let missing = text
+                .lines()
+                .filter(|line| !line.starts_with(required))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(SignerRoster::from_toml(&missing).is_err());
+        }
+        for threshold in [0, 4] {
+            let roster = SignerRoster::from_toml(
+                &text.replace("threshold = 2", &format!("threshold = {threshold}")),
+            )
+            .unwrap();
+            assert!(Deployment::load(&roster, &fixture.operator_table()).is_err());
+        }
+    }
+
+    #[test]
+    fn xpubs_must_match_the_roster_network() {
+        let fixture = Fixture::new(3, 2);
+        // The fixture's xpubs are testnet keys (tpub); a mainnet roster must refuse them.
+        let mainnet = SignerRoster::from_toml(
+            &fixture
+                .roster_toml()
+                .replace("network = \"regtest\"", "network = \"bitcoin\""),
+        )
+        .unwrap();
+        assert!(Deployment::load(&mainnet, &fixture.operator_table())
+            .unwrap_err()
+            .to_string()
+            .contains("wrong network kind"));
+    }
+
+    #[test]
+    fn duplicate_keys_are_refused_and_duplicate_fingerprints_warn() {
+        let fixture = Fixture::new(3, 2);
+        let operators = fixture.operator_table();
+        let duplicate =
+            SignerRoster::from_toml(&fixture.roster_toml_with_order(&[0, 1, 0])).unwrap();
+        assert!(Deployment::load(&duplicate, &operators)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate admin key"));
+        let mut shared = SignerRoster::from_toml(&fixture.roster_toml()).unwrap();
+        shared.admins[1].fingerprint = shared.admins[0].fingerprint;
+        assert!(Deployment::load(&shared, &operators).unwrap().warnings()[0]
+            .contains("share master fingerprint"));
+    }
+
+    #[test]
+    fn roster_controls_admin_key_order() {
+        let fixture = Fixture::new(3, 2);
+        let roster = SignerRoster::from_toml(&fixture.roster_toml_with_order(&[1, 0, 2])).unwrap();
+        let deployment = Deployment::load(&roster, &fixture.operator_table()).unwrap();
+        assert_eq!(deployment.admin_keys()[0], fixture.admin_xonly(1));
     }
 
     #[test]
     fn digest_changes_with_the_admin_set() {
-        let two_required = Deployment::from_params_toml(&Fixture::new(3, 2).params_toml()).unwrap();
-        let three_required =
-            Deployment::from_params_toml(&Fixture::new(3, 3).params_toml()).unwrap();
+        let two_required = Fixture::new(3, 2).deployment();
+        let three_required = Fixture::new(3, 3).deployment();
         assert_ne!(two_required.digest(), three_required.digest());
         assert_eq!(two_required.digest(), two_required.clone().digest());
     }

@@ -1,15 +1,15 @@
 //! Ledger (BIP-388) wallet policies for the Payout Administrators.
 //!
-//! Admin multisig, one for the deployment N/N key:
+//! Admin multisig, one for the selected N/N key:
 //!
 //! ```text
 //! tr(@0/**,multi_a(k,@1/**,…,@n/**))
 //! @0 = BIP-328 synthetic xpub of the N/N key (no key origin)
-//! @i = admin i's account xpub with origin [fpr/86'/coin'/73'], in params.toml order
+//! @i = admin i's account xpub with origin [fpr/86'/coin'/73'], in signers.toml order
 //! ```
 //!
 //! At receive index 0, `@0/0/0` is the connector's internal key and `@i/0/0` is admin i's key in
-//! `params.toml`, so the policy's first receive address is exactly the claim's admin payout
+//! `signers.toml`, so the policy's first receive address is exactly the claim's admin payout
 //! connector of that covenant (checked in the tests below). The Ledger therefore recognizes the
 //! connector inputs as its own and signs their leaf.
 //!
@@ -18,7 +18,7 @@
 use bitcoin::bip32::{KeySource, Xpub};
 use bitcoin::{Address, Network};
 
-use crate::deployment::{account_path, AdminSigner, Covenant, Deployment, DeploymentError};
+use crate::deployment::{account_path, AdminSigner, Covenant, Deployment};
 
 /// Descriptor template and ordered extended keys for a Ledger payout policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,9 +71,8 @@ fn admin_multisig_template(admin_count: usize, threshold: usize) -> String {
 }
 
 /// Builds the connector signing policy from the N/N synthetic xpub and the roster's ordered account xpubs.
-pub fn admin_multisig_policy(deployment: &Deployment) -> Result<LedgerPolicy, DeploymentError> {
-    let covenant = deployment.covenant();
-    let signers = deployment.signers()?;
+pub fn admin_multisig_policy(deployment: &Deployment, covenant: &Covenant) -> LedgerPolicy {
+    let signers = deployment.signers();
     let mut keys = vec![(None, covenant.synthetic_xpub(deployment.network()))];
     keys.extend(
         signers
@@ -81,11 +80,11 @@ pub fn admin_multisig_policy(deployment: &Deployment) -> Result<LedgerPolicy, De
             .map(|signer| signer_key(signer, deployment.network())),
     );
 
-    Ok(LedgerPolicy {
+    LedgerPolicy {
         name: admin_policy_name(covenant),
         template: admin_multisig_template(signers.len(), deployment.threshold()),
         keys,
-    })
+    }
 }
 
 /// Builds the signer's BIP-86 policy for Admin Wallet fee inputs and change.
@@ -118,7 +117,7 @@ mod tests {
         let fixture = Fixture::new(3, 2);
         let deployment = fixture.deployment();
         let covenant = deployment.covenant();
-        let policy = admin_multisig_policy(&deployment).unwrap();
+        let policy = admin_multisig_policy(&deployment, deployment.covenant());
         assert_eq!(policy.template, "tr(@0/**,multi_a(2,@1/**,@2/**,@3/**))");
         assert!(policy.name.len() <= 16);
         let secp = Secp256k1::verification_only();

@@ -6,7 +6,8 @@ license = "MIT OR Apache-2.0"
 description = "Payout Administrator logic: bridge params, false claim reports, Admin Block Payouts transactions"
 
 [dependencies]
-strata-bridge-common = { workspace = true }
+strata-asm-proto-bridge-state.workspace = true
+strata-crypto.workspace = true
 strata-bridge-connectors = { workspace = true }
 strata-bridge-primitives = { workspace = true }
 strata-bridge-key-deriv = { workspace = true }
@@ -21,3 +22,7 @@ musig2 = { git = "https://github.com/alpenlabs/musig2", branch = "fix/deserializ
 
 [features]
 test-support = []
+
+[dev-dependencies]
+ssz.workspace = true
+strata-bridge-common.workspace = true

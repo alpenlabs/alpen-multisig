@@ -8,8 +8,7 @@
 //!
 //! This crate has no I/O. It covers:
 //!
-//! - [`deployment`]: the trusted strata-bridge `params.toml` (admin keys, threshold, operator
-//!   schedule → newest N/N key) and the separate signer roster with each admin's account xpub.
+//! - [`deployment`]: the signer roster, threshold and verified ASM N/N key history.
 //! - [`report`]: false claim reports and their verification against mined transactions.
 //! - [`block_payouts_tx`]: building, inspecting, signing and finalizing Admin Block Payouts
 //!   transactions (PSBT), the signature copy/paste format, and the exact size model.

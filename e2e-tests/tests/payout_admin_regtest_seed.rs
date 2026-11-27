@@ -3,7 +3,9 @@
 //! `export DOCKER_CONTEXT=colima; docker build -t payout-rt-electrs -f staging/Dockerfile.electrs . && cargo build -p orchestrator-be && PAYOUT_RT_SERVER="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"]+"/debug/server")')" cargo test -p alpen-multisig-e2e-tests --test payout_admin_regtest_seed -- --ignored --nocapture`
 //! Owns only payout-rt-* containers and ports 18400..18403; removes services on unwind.
 //! Game construction is copied/cut from payout-admin-reference's seeder/common/tools.
+mod payout_admin_asm;
 mod payout_admin_common;
+use payout_admin_core::test_support::NACK_TIMELOCK;
 mod payout_admin_tools;
 use bitcoin::{
     consensus::encode::{deserialize_hex, serialize_hex},
@@ -71,6 +73,26 @@ async fn indexed(report: &Report, confirmations: u64) -> HashMap<bitcoin::Txid, 
     panic!("Electrum did not index report with {confirmations} ACK confirmations");
 }
 
+#[tokio::test]
+async fn kit_asm_history_decodes_with_the_desktop_rpc_client() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let fixture = Fixture::new(3, 2);
+    let expected = fixture.deployment().covenant().n_of_n();
+    let server =
+        tokio::spawn(async move { payout_admin_asm::serve(listener, &fixture).await.unwrap() });
+    let bridge = desktop_app::infrastructure::asm_status_rpc::fetch_bridge_state(&url)
+        .await
+        .unwrap();
+    assert_eq!(
+        payout_admin_core::Deployment::history_keys(bridge.operators()).unwrap(),
+        [expected]
+    );
+    server.abort();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker/Colima, payout-rt-electrs image and PAYOUT_RT_SERVER; see header command"]
 async fn payout_admin_regtest_seed() {
@@ -95,8 +117,17 @@ async fn payout_admin_regtest_seed() {
     let n_of_n = n_of_n_keypair(&fixture, &deployment);
     let directory = std::env::temp_dir().join(format!("payout-rt-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
-    let params = directory.join("params.toml");
-    std::fs::write(&params, fixture.params_toml()).unwrap();
+    let signers = directory.join("signers.toml");
+    std::fs::write(&signers, fixture.roster_toml()).unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let asm_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        payout_admin_asm::serve(listener, &Fixture::new(3, 2))
+            .await
+            .unwrap()
+    });
     for postgres in [false, true] {
         let mut coins = Vec::new();
         for index in 0..2 {
@@ -141,7 +172,7 @@ async fn payout_admin_regtest_seed() {
             "{:?}",
             verified.verdict()
         );
-        let _server = Coordinator::start(&params, postgres).await;
+        let _server = Coordinator::start(&signers, &asm_url, postgres).await;
         let mut tokens = Vec::new();
         for admin in 0..3 {
             let challenge = api(wire::CHALLENGE, "", Some(json!({}))).await;

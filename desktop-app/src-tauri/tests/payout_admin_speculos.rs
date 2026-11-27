@@ -2,6 +2,8 @@
 //! Run alone with LEDGER_SPECULOS_URL=http://127.0.0.1:5001 and SPECULOS_CAPTURE_DIR.
 //! Requires SPECULOS_COORDINATOR_BIN pointing to a built orchestrator-be.
 //! Synthetic prevouts: verifies signatures and real coordinator auth, not mining/broadcast.
+#[path = "../../../e2e-tests/tests/payout_admin_asm/mod.rs"]
+mod payout_admin_asm;
 use bitcoin::{
     bip32::Xpriv,
     hashes::Hash,
@@ -142,14 +144,23 @@ async fn payout_admin_speculos() {
         PathBuf::from(std::env::var("SPECULOS_CAPTURE_DIR").expect("capture directory required"));
     let step = Arc::new(Mutex::new("identity".to_string()));
     let driver = tokio::spawn(device_user(url, root.clone(), step.clone()));
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let asm_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        payout_admin_asm::serve(listener, &Fixture::new(3, 2))
+            .await
+            .unwrap()
+    });
     let flow = tokio::task::spawn_blocking(move || {
         let mut fixture = Fixture::new(3, 2);
         let seed = bip39::Mnemonic::parse(SPECULOS_SEED).unwrap().to_seed("");
         fixture.replace_admin_master(0, Xpriv::new_master(Network::Regtest, &seed).unwrap());
         let deployment = fixture.deployment();
         std::fs::create_dir_all(&root).unwrap();
-        let params = root.join("params.toml");
-        std::fs::write(&params, fixture.params_toml()).unwrap();
+        let signers = root.join("signers.toml");
+        std::fs::write(&signers, fixture.roster_toml()).unwrap();
         // Authentication needs no chain calls. Hold an inert TCP endpoint for the
         // coordinator's Electrum connection; never submit synthetic prevouts to it.
         let electrum = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -189,7 +200,8 @@ async fn payout_admin_speculos() {
                 "PAYOUT_ADMIN_PUBLIC_URL",
                 format!("http://127.0.0.1:{port}"),
             )
-            .env("PAYOUT_PARAMS_PATH", &params)
+            .env("PAYOUT_SIGNERS_PATH", &signers)
+            .env("STRATA_ADMIN_STATE_RPC_URL", asm_url)
             .env("PAYOUT_ELECTRUM_URL", format!("tcp://{electrum_address}"))
             .stdout(std::fs::File::create(root.join("coordinator-stdout.log")).unwrap())
             .stderr(std::fs::File::create(root.join("coordinator.log")).unwrap())
@@ -209,9 +221,8 @@ async fn payout_admin_speculos() {
             }
             panic!("coordinator did not start");
         });
-        let policy = policy::admin_multisig_policy(&deployment).unwrap();
-        let wallet =
-            policy::admin_wallet_policy(&deployment.signers().unwrap()[0], deployment.network());
+        let policy = policy::admin_multisig_policy(&deployment, deployment.covenant());
+        let wallet = policy::admin_wallet_policy(&deployment.signers()[0], deployment.network());
         let app = device::open_app().unwrap();
         assert!(matches!(app.version, (2, 4, 6) | (2, 5, 1)));
         eprintln!("APP: {app:?}");

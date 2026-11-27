@@ -151,8 +151,9 @@ struct Review {
 /// distinct from both the coordinator sign-in session and `WalletSession`.
 #[derive(Default)]
 struct SessionState {
-    /// The params.toml and signer file from the most recent load.
+    /// The verified deployment and roster from the most recent load.
     deployment: Option<Deployment>,
+    roster: Option<payout_admin_core::SignerRoster>,
     /// Identity from the most recent Ledger read.
     identity: Option<Identity>,
     /// Set at sign-in, unusable after expiry, cleared by identity reads and deployment loads.
@@ -274,20 +275,52 @@ impl PayoutAdminState {
         Ok(result)
     }
 
-    /// Checks both deployment files and the wallet network, then clears the previous coordinator session and reviews.
-    pub async fn load_deployment(
+    async fn bridge_state(&self) -> Result<strata_asm_proto_bridge::BridgeStateV1, String> {
+        let url = self
+            .config
+            .read()
+            .map_err(|error| error.to_string())?
+            .strata_rpc_url()
+            .to_owned();
+
+        crate::infrastructure::asm_status_rpc::fetch_bridge_state(&url)
+            .await
+            .map_err(|error| format!("Cannot reach or verify the ASM endpoint at {url}: {error}"))
+    }
+
+    pub async fn check_asm(&self) -> Result<(), String> {
+        Deployment::history_keys(self.bridge_state().await?.operators())
+            .map(|_| ())
+            .map_err(|error| format!("Cannot reach or verify the ASM endpoint: {error}"))
+    }
+
+    async fn deployment_from_asm(
         &self,
-        params: std::path::PathBuf,
-        signers: std::path::PathBuf,
-    ) -> Result<Value, String> {
-        let deployment = run_blocking(move || {
-            Deployment::load(
-                &std::fs::read_to_string(params).map_err(|error| error.to_string())?,
-                Some(&std::fs::read_to_string(signers).map_err(|error| error.to_string())?),
-            )
-            .map_err(|error| error.to_string())
-        })
-        .await?;
+        roster: &payout_admin_core::SignerRoster,
+    ) -> Result<Deployment, String> {
+        Deployment::load(roster, self.bridge_state().await?.operators()).map_err(
+            |error| match error {
+                payout_admin_core::DeploymentError::History(_) => {
+                    format!("Cannot reach or verify the ASM endpoint: {error}")
+                }
+                _ => error.to_string(),
+            },
+        )
+    }
+
+    async fn refresh_deployment(&self, state: &mut SessionState) -> Result<(), String> {
+        let roster = state.roster.as_ref().ok_or("Load signers.toml first")?;
+        state.deployment = Some(self.deployment_from_asm(roster).await?);
+
+        Ok(())
+    }
+
+    pub async fn load_deployment(&self, signers: std::path::PathBuf) -> Result<Value, String> {
+        let roster = payout_admin_core::SignerRoster::from_toml(
+            &std::fs::read_to_string(signers).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let deployment = self.deployment_from_asm(&roster).await?;
 
         if deployment.network() != self.admin_wallet_network()? {
             return Err("Deployment network differs from Admin Wallet".into());
@@ -295,6 +328,7 @@ impl PayoutAdminState {
 
         let result = json!({"network":deployment.network().to_string(),"deploymentDigest":deployment.digest(),"threshold":deployment.threshold(),"adminKeys":deployment.admin_keys().iter().map(ToString::to_string).collect::<Vec<_>>(),"nOfN":deployment.covenant().n_of_n_xonly().to_string(),"connectorAddress":policy::connector_address(&deployment).to_string(),"warnings":deployment.warnings()});
         let mut state = self.inner.lock().await;
+        state.roster = Some(roster);
         state.deployment = Some(deployment);
         state.coordinator = None;
         state.open_reviews.clear();
@@ -428,7 +462,6 @@ impl SessionState {
 
         identity.signer = deployment
             .signers()
-            .map_err(|error| error.to_string())?
             .iter()
             .find(|signer| {
                 signer.xonly() == identity.signer.xonly()
@@ -635,14 +668,18 @@ impl PayoutAdminState {
     /// Checks pasted reports against Electrum and saves the valid claims under a verification ID for bundling.
     pub async fn check_reports(&self, text: String) -> Result<Value, String> {
         let mut state = self.inner.lock().await;
+        self.refresh_deployment(&mut state).await?;
         let deployment = state.deployment.clone().ok_or("Load deployment first")?;
         let (parsed_reports, malformed) = report::parse_paste(&text, deployment.network())
             .map_err(|error| error.to_string())?
             .into_parts();
         let reports = self
             .with_electrum(move |electrum| {
-                let connector_script = deployment.covenant().connector_script();
-
+                let scripts: HashSet<_> = deployment
+                    .covenants()
+                    .iter()
+                    .map(|covenant| covenant.connector_script())
+                    .collect();
                 let mut spends = SpendCheck::default();
                 parsed_reports
                     .iter()
@@ -654,21 +691,29 @@ impl PayoutAdminState {
                                 transactions.insert(txid, transaction);
                             }
                         }
-                        let state = if spends.is_spent_in_block(
-                            electrum,
-                            report.blocked_outpoint(),
-                            &connector_script,
-                        )? {
-                            ConnectorState::SpentConfirmed
-                        } else {
-                            ConnectorState::Unspent
+                        let outpoint = report.blocked_outpoint();
+                        let output = transactions
+                            .get(&outpoint.txid)
+                            .and_then(|claim| claim.tx().output.get(outpoint.vout as usize))
+                            .filter(|output| scripts.contains(&output.script_pubkey));
+                        let connector = match output {
+                            Some(output)
+                                if spends.is_spent_in_block(
+                                    electrum,
+                                    outpoint,
+                                    &output.script_pubkey,
+                                )? =>
+                            {
+                                Some(ConnectorState::SpentConfirmed)
+                            }
+                            _ => None,
                         };
 
                         Ok(report::verify_report(
                             &deployment,
                             report,
                             &transactions,
-                            Some(state),
+                            connector,
                         ))
                     })
                     .collect::<Result<Vec<_>, String>>()
@@ -677,7 +722,12 @@ impl PayoutAdminState {
         let claims = reports
             .iter()
             .filter(|report| matches!(report.verdict(), report::ReportVerdict::Valid))
-            .map(|report| BundledClaim::new(report.new_claim_admin_payout_outpoint().txid))
+            .filter_map(|report| {
+                Some(BundledClaim::new(
+                    report.new_claim_admin_payout_outpoint().txid,
+                    report.n_of_n()?,
+                ))
+            })
             .collect();
         let key = VerificationId::new();
         state.ready_for_bundling = Some((key, claims));
@@ -698,6 +748,13 @@ impl PayoutAdminState {
 
         let past: Vec<wire::PastBlockPayoutsView> =
             coordinator_client.request(wire::PAST, None).await?;
+
+        if !pending.is_empty() {
+            // A failed refresh keeps the last key set. Review, signing and report checks refresh
+            // again and report the error there.
+            let _ = self.refresh_deployment(&mut state).await;
+        }
+
         let deployment = state.deployment.as_ref().ok_or("Load deployment first")?;
         let mut views = Vec::new();
         for pending_payout in &mut pending {
@@ -765,7 +822,8 @@ impl PayoutAdminState {
 
     /// Checks the PSBT, its change, and its inputs against local data before submitting it to the coordinator.
     pub async fn import_psbt(&self, text: String) -> Result<wire::PendingBlockPayoutsView, String> {
-        let state = self.inner.lock().await;
+        let mut state = self.inner.lock().await;
+        self.refresh_deployment(&mut state).await?;
         let deployment = state.deployment.as_ref().ok_or("Load deployment first")?;
         let psbt =
             block_payouts_tx::import_psbt(deployment, &text).map_err(|error| error.to_string())?;
@@ -894,7 +952,11 @@ impl PayoutAdminState {
             .filter(|claim| !removed.contains(&claim.outpoint()))
             .cloned()
             .collect::<Vec<_>>();
-        let connector_script = deployment.covenant().connector_script();
+        let scripts: HashMap<_, _> = deployment
+            .covenants()
+            .iter()
+            .map(|entry| (entry.n_of_n(), entry.connector_script()))
+            .collect();
         let recheck = claims.clone();
         let claims = self
             .with_electrum(move |electrum| {
@@ -902,11 +964,10 @@ impl PayoutAdminState {
                 recheck
                     .into_iter()
                     .filter_map(|claim| {
-                        match spends.is_spent_in_block(
-                            electrum,
-                            claim.outpoint(),
-                            &connector_script,
-                        ) {
+                        let Some(script) = scripts.get(&claim.n_of_n()) else {
+                            return Some(Err("Unknown N/N key; verify reports again".into()));
+                        };
+                        match spends.is_spent_in_block(electrum, claim.outpoint(), script) {
                             Ok(false) => Some(Ok(claim)),
                             Ok(true) => None,
                             Err(error) => Some(Err(error)),
@@ -1005,8 +1066,13 @@ impl PayoutAdminState {
                     .map_err(|error| error.to_string())?;
                 psbts.insert(
                     key,
-                    block_payouts_tx::build_psbt(
+                    block_payouts_tx::build_psbt_for_covenant(
                         &deployment,
+                        deployment
+                            .covenants()
+                            .iter()
+                            .find(|entry| entry.n_of_n() == transaction.claims()[0].n_of_n())
+                            .ok_or("Unknown N/N key")?,
                         &transaction.connectors(),
                         &selected,
                         &change,
@@ -1031,6 +1097,7 @@ impl PayoutAdminState {
         txid: Option<String>,
     ) -> Result<Value, String> {
         let mut state = self.inner.lock().await;
+        self.refresh_deployment(&mut state).await?;
         let (deployment, identity) = state.checked_deployment_and_identity()?;
         let own = bundle.is_some();
         let mut psbt = match bundle {
@@ -1086,7 +1153,7 @@ impl PayoutAdminState {
             own || has_unsigned_own_fee_inputs(deployment, &identity.signer, &psbt)?,
             &self.policies,
         )?;
-        let result = json!({"reviewId":key,"blockPayoutsTxid":analysis.block_payouts_txid().to_string(),"claims":analysis.connector_inputs().iter().map(|connector_input| BundledClaim::new(connector_input.admin_payout_outpoint().txid)).collect::<Vec<_>>(),"claimInputCount":analysis.connector_inputs().len(),"feeSat":analysis.fee().to_sat(),"vsize":analysis.vsize(),"changeAddress":bitcoin::Address::from_script(&psbt.unsigned_tx.output[0].script_pubkey,device_network(deployment.network())).map_err(|error| error.to_string())?.to_string(),"changeSat":analysis.change().to_sat(),"deviceScreens":screens,"pinLockWarning":15 <= analysis.connector_inputs().len(),"warnings":deployment.warnings()});
+        let result = json!({"reviewId":key,"blockPayoutsTxid":analysis.block_payouts_txid().to_string(),"claims":analysis.connector_inputs().iter().map(|connector_input| BundledClaim::new(connector_input.admin_payout_outpoint().txid, analysis.covenant().n_of_n())).collect::<Vec<_>>(),"claimInputCount":analysis.connector_inputs().len(),"feeSat":analysis.fee().to_sat(),"vsize":analysis.vsize(),"changeAddress":bitcoin::Address::from_script(&psbt.unsigned_tx.output[0].script_pubkey,device_network(deployment.network())).map_err(|error| error.to_string())?.to_string(),"changeSat":analysis.change().to_sat(),"deviceScreens":screens,"pinLockWarning":15 <= analysis.connector_inputs().len(),"warnings":deployment.warnings()});
         state.open_reviews.insert(
             key,
             Review {
@@ -1109,6 +1176,7 @@ impl PayoutAdminState {
         own: bool,
     ) -> Result<wire::PasteSignaturesView, String> {
         let mut state = self.inner.lock().await;
+        self.refresh_deployment(&mut state).await?;
         let Payload::Transaction(mut psbt, expected_own) = state.take_review(review_id.parse()?)?
         else {
             return Err("Not a transaction review".into());
@@ -1271,14 +1339,15 @@ impl PayoutAdminState {
         })
         .await?;
         let fingerprint = identity.signer.fingerprint();
-        let policy =
-            policy::admin_multisig_policy(deployment).map_err(|error| error.to_string())?;
+        let analysis =
+            block_payouts_tx::analyze(deployment, psbt).map_err(|error| error.to_string())?;
+        let policy = policy::admin_multisig_policy(deployment, analysis.covenant());
         let policy_id = device::policy_id(&policy);
         let hmac = match self.policies.get(fingerprint, &policy_id) {
             Some(hmac) => hmac,
             None => {
                 let registration_policy = policy.clone();
-                let expected = deployment.covenant().connector_script();
+                let expected = analysis.covenant().connector_script();
                 let hmac = run_blocking(move || {
                     let hmac = device::register_policy(&registration_policy, fingerprint)?;
                     let address =
@@ -1385,7 +1454,7 @@ fn inputs_of_pending_block_payouts_txs(
     for pending_payout in pending {
         result.extend(
             block_payouts_tx::import_psbt(deployment, &pending_payout.psbt)
-                .map_err(|_| "A pending block payouts transaction from the coordinator does not match this machine's params.toml.")?
+                .map_err(|_| "A pending block payouts transaction from the coordinator does not match this machine's payout configuration.")?
                 .unsigned_tx
                 .input
                 .iter()
@@ -1462,7 +1531,6 @@ fn check_change_output(deployment: &Deployment, psbt: &Psbt) -> Result<(), Strin
         };
         for signer in deployment
             .signers()
-            .map_err(|error| error.to_string())?
             .iter()
             .filter(|signer| signer.fingerprint() == *fingerprint)
         {
@@ -1525,8 +1593,7 @@ impl Identity {
     ) -> Result<Vec<String>, String> {
         let analysis =
             block_payouts_tx::analyze(deployment, psbt).map_err(|error| error.to_string())?;
-        let policy =
-            policy::admin_multisig_policy(deployment).map_err(|error| error.to_string())?;
+        let policy = policy::admin_multisig_policy(deployment, analysis.covenant());
         let newer = (2, 5, 0) <= self.app.version;
         let warns_high_fee = is_fee_high(analysis.fee().to_sat(), analysis.input_total().to_sat());
         let mut lines = Vec::new();
@@ -1675,7 +1742,7 @@ impl PayoutAdminState {
                 .config
                 .read()
                 .map_err(|error| error.to_string())?
-                .payout_params_path
+                .payout_signers_path
                 .is_none()
         {
             return Ok(state);
@@ -1692,7 +1759,7 @@ impl PayoutAdminState {
             .iter()
             .map(|pending_payout| {
                 block_payouts_tx::import_psbt(deployment, &pending_payout.psbt)
-                    .map_err(|_| "A pending block payouts transaction from the coordinator does not match this machine's params.toml.")
+                    .map_err(|_| "A pending block payouts transaction from the coordinator does not match this machine's payout configuration.")
             })
             .collect::<Result<Vec<_>, _>>()?;
         let wallet_service = self.wallet.current().ok_or("Connect Admin Wallet first")?;
@@ -1973,19 +2040,13 @@ mod tests {
         )
         .unwrap();
         check_change_output(&deployment, &psbt).unwrap();
+        assert!(has_unsigned_own_fee_inputs(&deployment, &deployment.signers()[0], &psbt).unwrap());
         assert!(
-            has_unsigned_own_fee_inputs(&deployment, &deployment.signers().unwrap()[0], &psbt)
-                .unwrap()
+            !has_unsigned_own_fee_inputs(&deployment, &deployment.signers()[1], &psbt).unwrap()
         );
-        assert!(!has_unsigned_own_fee_inputs(
-            &deployment,
-            &deployment.signers().unwrap()[1],
-            &psbt
-        )
-        .unwrap());
         // Correctly derived origins do not prove ownership of a different script.
         let mut misleading = psbt.clone();
-        let other = deployment.signers().unwrap()[1].clone();
+        let other = deployment.signers()[1].clone();
         let AdminWalletKey { key, path } =
             derive_admin_wallet_key(&other, deployment.network(), KeychainKind::Internal, 0)
                 .unwrap();
@@ -1996,12 +2057,10 @@ mod tests {
             bitcoin::ScriptBuf::new_p2tr(&bitcoin::secp256k1::Secp256k1::new(), key, None);
         misleading.outputs[0].tap_internal_key = Some(key);
         check_change_output(&deployment, &misleading).unwrap();
-        assert!(!has_unsigned_own_fee_inputs(
-            &deployment,
-            &deployment.signers().unwrap()[0],
-            &misleading
-        )
-        .unwrap());
+        assert!(
+            !has_unsigned_own_fee_inputs(&deployment, &deployment.signers()[0], &misleading)
+                .unwrap()
+        );
         misleading = psbt.clone();
         misleading.inputs[1].tap_internal_key = Some(other.xonly());
         misleading.inputs[1]
@@ -2013,12 +2072,10 @@ mod tests {
             other.xonly(),
             None,
         );
-        assert!(!has_unsigned_own_fee_inputs(
-            &deployment,
-            &deployment.signers().unwrap()[0],
-            &misleading
-        )
-        .unwrap());
+        assert!(
+            !has_unsigned_own_fee_inputs(&deployment, &deployment.signers()[0], &misleading)
+                .unwrap()
+        );
         let pending = wire::PendingBlockPayoutsView {
             txid: psbt.unsigned_tx.compute_txid(),
             psbt: psbt.to_string(),
@@ -2043,7 +2100,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         let mut identity = Identity {
-            signer: deployment.signers().unwrap()[0].clone(),
+            signer: deployment.signers()[0].clone(),
             app: device::LedgerApp {
                 name: "Bitcoin Test".into(),
                 version: (2, 4, 6),
@@ -2104,7 +2161,7 @@ mod tests {
         assert!(!old
             .iter()
             .any(|screen_line| screen_line.starts_with("High fees warning")));
-        let policy = policy::admin_multisig_policy(&deployment).unwrap();
+        let policy = policy::admin_multisig_policy(&deployment, deployment.covenant());
         store
             .save(
                 identity.signer.fingerprint(),
@@ -2189,7 +2246,7 @@ mod tests {
     #[test]
     fn first_change_index_does_not_advance_during_bundling() {
         let fixture = Fixture::new(2, 1);
-        let me = fixture.deployment().signers().unwrap()[0].clone();
+        let me = fixture.deployment().signers()[0].clone();
         let mut wallet = crate::infrastructure::admin_wallet::wallet::load_watch_only_admin_wallet(
             &me.account_xpub().to_string(),
             Network::Regtest,

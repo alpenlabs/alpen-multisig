@@ -6,7 +6,6 @@ export type NodeConfig = {
 	customBtcRpcUrl?: string
 	customBtcRpcUser?: string
 	customBtcRpcPass?: string
-	payoutParamsPath?: string
 	payoutSignersPath?: string
 	// Electrum indexer URL for Admin Wallet sync (R2.3)
 	customElectrumUrl?: string

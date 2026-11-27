@@ -2,7 +2,7 @@ use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub payout_params_path: Option<String>,
+    pub payout_signers_path: Option<String>,
     pub payout_admin_public_url: Option<String>,
     pub payout_electrum_url: String,
     pub server_host: String,
@@ -65,7 +65,7 @@ impl Config {
         ensure_asm_rpc_url_allowed(&strata_admin_state_rpc_url, ASM_MOCKS_COMPILED)?;
 
         Ok(Self {
-            payout_params_path: std::env::var("PAYOUT_PARAMS_PATH")
+            payout_signers_path: std::env::var("PAYOUT_SIGNERS_PATH")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
             payout_admin_public_url: std::env::var("PAYOUT_ADMIN_PUBLIC_URL")

@@ -99,10 +99,14 @@ pub async fn fetch_current_vk(rpc_url: &str) -> Result<CurrentVk, String> {
     })
 }
 
+pub async fn fetch_bridge_state(rpc_url: &str) -> Result<BridgeStateV1, String> {
+    let status = rpc_call(rpc_url, "strata_asm_getStatus", json!([])).await?;
+
+    decode_bridge_state(&decode_anchor_state_from_status(&status)?)
+}
+
 pub async fn fetch_current_operators(rpc_url: &str) -> Result<Vec<String>, String> {
-    let status_result = rpc_call(rpc_url, "strata_asm_getStatus", json!([])).await?;
-    let anchor = decode_anchor_state_from_status(&status_result)?;
-    let bridge = decode_bridge_state(&anchor)?;
+    let bridge = fetch_bridge_state(rpc_url).await?;
     Ok(bridge
         .operators()
         .operators()

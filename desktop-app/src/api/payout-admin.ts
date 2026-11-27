@@ -151,8 +151,12 @@ export function payoutShowKey(): Promise<ApiResult<PayoutIdentity>> {
 	return tauriCall('payout_admin_show_key', {}, identitySchema)
 }
 
-export function payoutLoadDeployment(paramsPath: string, signersPath: string): Promise<ApiResult<PayoutDeployment>> {
-	return tauriCall('payout_admin_load_deployment', { paramsPath, signersPath }, deploymentSchema)
+export function payoutCheckAsm() {
+	return tauriCall('payout_admin_check_asm', {}, z.null())
+}
+
+export function payoutLoadDeployment(signersPath: string): Promise<ApiResult<PayoutDeployment>> {
+	return tauriCall('payout_admin_load_deployment', { signersPath }, deploymentSchema)
 }
 
 export function payoutSignInReview(coordinatorUrl: string): Promise<ApiResult<PayoutSignInReview>> {

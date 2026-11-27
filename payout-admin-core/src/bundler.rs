@@ -1,13 +1,13 @@
 //! Bundles Admin Block Payouts transactions from valid reports.
 //!
-//! - Claims are ordered by claim txid and packed into as few
+//! - Claims are grouped by N/N key, ordered within each group by claim txid and packed into as few
 //!   transactions as the TRUC size limit allows, counting the fee input(s) and the one change
 //!   output.
 //! - Each transaction is funded from distinct Admin Wallet coins: the smallest single coin that
 //!   covers the fee, else the largest coins first until it is covered.
 
 use bitcoin::{Amount, OutPoint, ScriptBuf};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::block_payouts_tx::{final_vsize, ConnectorRef, P2TR_DUST_SAT, TRUC_MAX_VSIZE};
 use crate::deployment::Deployment;
@@ -23,26 +23,9 @@ pub const MSG_SIZE_LIMIT: &str =
 /// A claim chosen for blocking (from a valid report).
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct BundledClaim {
+    #[serde(skip)]
+    n_of_n: bitcoin::secp256k1::PublicKey,
     outpoint: OutPoint,
-}
-
-impl<'de> Deserialize<'de> for BundledClaim {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Input {
-            outpoint: OutPoint,
-        }
-
-        let Input { outpoint } = Input::deserialize(deserializer)?;
-
-        if outpoint.vout != ClaimTx::ADMIN_PAYOUT_VOUT {
-            return Err(serde::de::Error::custom(format!(
-                "{outpoint} is not a claim's admin payout output"
-            )));
-        }
-
-        Ok(Self::new(outpoint.txid))
-    }
 }
 
 impl BundledClaim {
@@ -51,9 +34,15 @@ impl BundledClaim {
         self.outpoint
     }
 
+    /// The N/N key whose admin payout connector this claim spends.
+    pub fn n_of_n(&self) -> bitcoin::secp256k1::PublicKey {
+        self.n_of_n
+    }
+
     /// Selects the admin payout output of a claim.
-    pub fn new(claim_txid: bitcoin::Txid) -> Self {
+    pub fn new(claim_txid: bitcoin::Txid, n_of_n: bitcoin::secp256k1::PublicKey) -> Self {
         Self {
+            n_of_n,
             outpoint: OutPoint::new(claim_txid, ClaimTx::ADMIN_PAYOUT_VOUT),
         }
     }
@@ -318,13 +307,18 @@ pub fn bundle(
     let mut sorted = claims.to_vec();
     sorted.sort_by_key(|claim| claim.outpoint.txid);
     sorted.dedup_by_key(|claim| claim.outpoint.txid);
+    sorted.sort_by_key(|claim| claim.n_of_n);
     // Start with one fee input; shrink below if funding needs more.
     let claims_per_transaction = max_claims_per_tx(deployment, 1, change).max(1);
     let mut available = coins.to_vec();
     let mut transactions = Vec::new();
     let mut rest = sorted.as_slice();
     while !rest.is_empty() {
-        let mut take = claims_per_transaction.min(rest.len());
+        let mut take = rest
+            .iter()
+            .take(claims_per_transaction)
+            .take_while(|claim| claim.n_of_n == rest[0].n_of_n)
+            .count();
         let transaction = loop {
             let mut left = available.clone();
             let transaction = fund(deployment, &rest[..take], &mut left, fee_rate, change)?;
@@ -354,20 +348,13 @@ mod tests {
     use bitcoin::{hashes::Hash, Txid};
 
     #[test]
-    fn claim_wire_round_trips_and_rejects_wrong_vout() {
+    fn claim_wire_contains_the_admin_outpoint() {
         let original = claim(1);
         let wire = serde_json::to_value(original).unwrap();
         assert_eq!(
             wire,
             serde_json::json!({"outpoint": original.outpoint().to_string()})
         );
-        let input: BundledClaim = serde_json::from_value(wire).unwrap();
-        assert_eq!(input.outpoint(), original.outpoint());
-        let wrong_output = OutPoint::new(original.outpoint().txid, 0);
-        assert!(serde_json::from_value::<BundledClaim>(
-            serde_json::json!({"outpoint": wrong_output})
-        )
-        .is_err());
         assert_eq!(
             serde_json::to_value(BundleError::SizeLimit).unwrap(),
             MSG_SIZE_LIMIT
@@ -378,7 +365,10 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[..4].copy_from_slice(&i.to_le_bytes());
 
-        BundledClaim::new(Txid::from_byte_array(bytes))
+        static KEY: std::sync::LazyLock<bitcoin::secp256k1::PublicKey> =
+            std::sync::LazyLock::new(|| Fixture::new(3, 2).deployment().covenant().n_of_n());
+
+        BundledClaim::new(Txid::from_byte_array(bytes), *KEY)
     }
 
     fn coin(i: u8, value_sat: u64) -> AvailableCoin {
@@ -386,6 +376,34 @@ mod tests {
             OutPoint::new(Txid::from_byte_array([i; 32]), 0),
             Amount::from_sat(value_sat),
         )
+    }
+
+    #[test]
+    fn groups_claims_by_nn_key() {
+        let deployment = Fixture::new(3, 2).after_operator_removal();
+        let old = deployment.covenants()[0].n_of_n();
+        let current = deployment.covenant().n_of_n();
+        let claims = [old, current, old]
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| BundledClaim::new(Txid::from_byte_array([index as u8; 32]), key))
+            .collect::<Vec<_>>();
+        let bundle = bundle(
+            &deployment,
+            &claims,
+            &[coin(4, 10000), coin(5, 10000)],
+            FeeRate::new(10).unwrap(),
+            &P2TR_PLACEHOLDER_SCRIPT,
+        )
+        .unwrap();
+        assert_eq!(bundle.txs().len(), 2);
+        for transaction in bundle.txs() {
+            assert!(transaction
+                .claims()
+                .iter()
+                .all(|claim| claim.n_of_n == transaction.claims()[0].n_of_n));
+            assert!(transaction.is_ok());
+        }
     }
 
     #[test]
