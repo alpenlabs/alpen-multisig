@@ -97,6 +97,8 @@ If setup fails, run `./stop.sh` and start again from Step 1.
 
 ## Block Payouts Button
 
+Each version 2 report identifies one ACK and the contest transaction ID for each claim to block. Claims may precede or follow the ACK.
+
 ### Step 7 — Block Immature Claim
 
 1. In the app, click **+ Block payouts**. The **Block payouts** screen opens.
@@ -142,7 +144,7 @@ If setup fails, run `./stop.sh` and start again from Step 1.
    ./regtest-bridge report 2 | ./pbcopy
    ```
 
-3. In the app, paste the clipboard into the text field and click **Verify reports**. 3 reports are accepted and 1 report is rejected ("3 valid, 1 excluded").
+3. In the app, paste the clipboard into the text field and click **Verify reports**. 3 claims are accepted and 1 claim is rejected ("3 valid, 1 excluded").
 4. Click **Sign on Ledger**.
 5. On the Ledger, verify that each screen matches (claim inputs) and click **accept**.
 6. On the Ledger, verify that each screen matches (fee inputs) and click **accept**.
@@ -169,7 +171,7 @@ If setup fails, run `./stop.sh` and start again from Step 1.
    ./regtest-bridge report 3 | ./pbcopy
    ```
 
-3. In the app, paste the clipboard into the text field and click **Verify reports**. 20 reports are accepted ("20 valid, 0 excluded").
+3. In the app, paste the clipboard into the text field and click **Verify reports**. 20 claims are accepted ("20 valid, 0 excluded").
 4. Click **Sign on Ledger**.
 5. On the Ledger, verify that each screen matches (claim inputs) and click **accept**.
 6. On the Ledger, verify that each screen matches (fee inputs) and click **accept**.

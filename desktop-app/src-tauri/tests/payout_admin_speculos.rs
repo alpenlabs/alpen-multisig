@@ -300,9 +300,7 @@ async fn payout_admin_speculos() {
             *step.lock().unwrap() = format!("payout-{count}");
             let claims: Vec<_> = (0..count)
                 .map(|i| {
-                    block_payouts_tx::ConnectorRef::new(
-                        fixture.game(&deployment, i).report().new_claim_txid(),
-                    )
+                    block_payouts_tx::ConnectorRef::new(fixture.game(&deployment, i).claim_txid())
                 })
                 .collect();
             let coin = test_support::fee_coin(&fixture, 0, 4, 100_000);

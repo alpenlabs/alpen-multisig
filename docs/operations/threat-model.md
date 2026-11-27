@@ -11,6 +11,9 @@
 ## Trust boundaries
 
 The configured ASM endpoint is trusted for the N/N key history used to verify false-claim reports.
+We link operators by equal claim output 3 (CPFP) scripts instead of the contest proof output suggested by PRD 07
+because output 3 needs no search over deposit indexes and the contest’s N/N signature covers the claim txid and
+thus all its outputs.
 
 ```mermaid
 flowchart LR

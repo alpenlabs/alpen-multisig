@@ -664,6 +664,59 @@ fn check_inputs_on_chain(
     Ok(())
 }
 
+fn fetch_report_transactions(
+    electrum: &bdk_electrum::electrum_client::Client,
+    reports: &[report::Report],
+) -> Result<HashMap<Txid, MinedTx>, String> {
+    let mut transactions = HashMap::new();
+    for report in reports {
+        report.fetch_transactions(&mut transactions, |txid| {
+            fetch_transaction_with_block(electrum, txid)
+        })?;
+    }
+
+    Ok(transactions)
+}
+
+fn verify_claims_on_chain(
+    electrum: &bdk_electrum::electrum_client::Client,
+    deployment: &Deployment,
+    reports: &[report::Report],
+    transactions: &HashMap<Txid, MinedTx>,
+) -> Result<Vec<report::VerifiedReport>, String> {
+    let scripts: HashSet<_> = deployment
+        .covenants()
+        .iter()
+        .map(|covenant| covenant.connector_script())
+        .collect();
+    let mut spends = SpendCheck::default();
+    let mut connectors = HashMap::new();
+    for report in reports {
+        for &contest in report.contest_txids() {
+            let Ok(outpoint) = report::claim_outpoint(transactions, contest) else {
+                continue;
+            };
+            let output = transactions
+                .get(&outpoint.txid)
+                .and_then(|claim| claim.tx().output.get(outpoint.vout as usize))
+                .filter(|output| scripts.contains(&output.script_pubkey));
+
+            if let Some(output) = output {
+                if spends.is_spent_in_block(electrum, outpoint, &output.script_pubkey)? {
+                    connectors.insert(outpoint, ConnectorState::SpentConfirmed);
+                }
+            }
+        }
+    }
+
+    Ok(report::verify_reports(
+        deployment,
+        reports,
+        transactions,
+        &connectors,
+    ))
+}
+
 impl PayoutAdminState {
     /// Checks pasted reports against Electrum and saves the valid claims under a verification ID for bundling.
     pub async fn check_reports(&self, text: String) -> Result<Value, String> {
@@ -675,48 +728,9 @@ impl PayoutAdminState {
             .into_parts();
         let reports = self
             .with_electrum(move |electrum| {
-                let scripts: HashSet<_> = deployment
-                    .covenants()
-                    .iter()
-                    .map(|covenant| covenant.connector_script())
-                    .collect();
-                let mut spends = SpendCheck::default();
-                parsed_reports
-                    .iter()
-                    .map(|report| {
-                        let mut transactions = HashMap::new();
-                        for txid in report.txids() {
-                            if let Some(transaction) = fetch_transaction_with_block(electrum, txid)?
-                            {
-                                transactions.insert(txid, transaction);
-                            }
-                        }
-                        let outpoint = report.blocked_outpoint();
-                        let output = transactions
-                            .get(&outpoint.txid)
-                            .and_then(|claim| claim.tx().output.get(outpoint.vout as usize))
-                            .filter(|output| scripts.contains(&output.script_pubkey));
-                        let connector = match output {
-                            Some(output)
-                                if spends.is_spent_in_block(
-                                    electrum,
-                                    outpoint,
-                                    &output.script_pubkey,
-                                )? =>
-                            {
-                                Some(ConnectorState::SpentConfirmed)
-                            }
-                            _ => None,
-                        };
+                let transactions = fetch_report_transactions(electrum, &parsed_reports)?;
 
-                        Ok(report::verify_report(
-                            &deployment,
-                            report,
-                            &transactions,
-                            connector,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, String>>()
+                verify_claims_on_chain(electrum, &deployment, &parsed_reports, &transactions)
             })
             .await?;
         let claims = reports
@@ -724,7 +738,7 @@ impl PayoutAdminState {
             .filter(|report| matches!(report.verdict(), report::ReportVerdict::Valid))
             .filter_map(|report| {
                 Some(BundledClaim::new(
-                    report.new_claim_admin_payout_outpoint().txid,
+                    report.new_claim_admin_payout_outpoint()?.txid,
                     report.n_of_n()?,
                 ))
             })

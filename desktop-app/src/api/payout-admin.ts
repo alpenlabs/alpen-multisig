@@ -129,7 +129,8 @@ const reportsSchema = z.object({
 	verificationId: z.string(),
 	reports: z.array(
 		z.object({
-			newClaimAdminPayoutOutpoint: z.string(),
+			newClaimAdminPayoutOutpoint: z.string().nullable(),
+			report: z.object({ contestTxids: z.array(z.string()) }),
 			verdict: z.enum(['valid', 'invalid', 'spent']),
 			reasons: z.array(z.string()),
 		}),

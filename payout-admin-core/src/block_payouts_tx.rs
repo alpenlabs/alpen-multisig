@@ -1235,9 +1235,7 @@ mod tests {
 
     fn two_claims(fixture: &Fixture, deployment: &Deployment) -> Vec<ConnectorRef> {
         (0..2)
-            .map(|variant| {
-                ConnectorRef::new(fixture.game(deployment, variant).report().new_claim_txid())
-            })
+            .map(|variant| ConnectorRef::new(fixture.game(deployment, variant).claim_txid()))
             .collect()
     }
 
@@ -1272,9 +1270,7 @@ mod tests {
         let fixture = Fixture::new(3, 2);
         let deployment = fixture.deployment();
         let coin = fee_coin(&fixture, 0, 4, 50_000);
-        let claims = vec![ConnectorRef::new(
-            fixture.game(&deployment, 1).report().new_claim_txid(),
-        )];
+        let claims = vec![ConnectorRef::new(fixture.game(&deployment, 1).claim_txid())];
         let mut working_psbt =
             build_psbt(&deployment, &claims, &[coin], &change(&fixture, 49_000)).unwrap();
         let text = export_psbt(&deployment, &working_psbt).unwrap();

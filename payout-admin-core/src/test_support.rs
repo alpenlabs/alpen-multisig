@@ -292,9 +292,8 @@ fn ack_tx(
 
 #[derive(Clone)]
 pub struct GameTxs {
-    operator_pubkey: XOnlyPublicKey,
-    /// What an Electrum server returns for the report's txids: new claim, new contest, acked claim, acked
-    /// contest, ack.
+    /// What an Electrum server returns for the transactions verification fetches: new claim, new
+    /// contest, acked claim, acked contest, ack. The report itself names only the contests and the ack.
     txs: Vec<(Transaction, Option<u64>)>,
     /// The counterproof between the acked contest and the ack. It is on chain but not in a report.
     counterproof_txid: Txid,
@@ -329,13 +328,15 @@ impl GameTxs {
         self.counterproof_txid
     }
 
+    pub fn claim_txid(&self) -> Txid {
+        self.txs[0].0.compute_txid()
+    }
+
     /// Returns the report.
     pub fn report(&self) -> Report {
         Report::from_value(serde_json::json!({
             "type": crate::report::REPORT_TYPE, "version": crate::report::REPORT_VERSION, "network": "regtest",
-            "operatorPubkey": self.operator_pubkey, "newClaimTxid": self.txs[0].0.compute_txid(),
-            "newContestTxid": self.txs[1].0.compute_txid(), "ackedClaimTxid": self.txs[2].0.compute_txid(),
-            "ackedContestTxid": self.acked_contest_txid(), "counterproofAckTxid": self.txs[4].0.compute_txid(),
+            "contestTxids": [self.txs[1].0.compute_txid()], "counterproofAckTxid": self.txs[4].0.compute_txid(),
         }), Network::Regtest).unwrap()
     }
 
@@ -433,7 +434,6 @@ impl GameTxs {
         let ack = ack_tx(deployment, acked_key, counterproof_txid, contest_txid);
 
         Self {
-            operator_pubkey: fixture.operator_xonly(0),
             txs: vec![
                 (new_claim, Some(NEW_CLAIM_HEIGHT)),
                 (new_contest, Some(NEW_CLAIM_HEIGHT + 1)),

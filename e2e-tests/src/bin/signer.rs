@@ -175,9 +175,8 @@ mod tests {
         let mut fixture = Fixture::new(3, 2);
         fixture.replace_admin_master(1, master);
         let deployment = fixture.deployment();
-        let claims = [1, 2].map(|index| {
-            ConnectorRef::new(fixture.game(&deployment, index).report().new_claim_txid())
-        });
+        let claims =
+            [1, 2].map(|index| ConnectorRef::new(fixture.game(&deployment, index).claim_txid()));
         let base = block_payouts_tx::build_psbt(
             &deployment,
             &claims,

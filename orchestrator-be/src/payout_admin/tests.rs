@@ -54,7 +54,7 @@ fn setup() -> (Fixture, Arc<Service>, Arc<FakeBlockchain>, Psbt) {
     let mut psbt = block_payouts_tx::build_psbt(
         &deployment,
         &[block_payouts_tx::ConnectorRef::new(
-            fixture.game(&deployment, 1).report().new_claim_txid(),
+            fixture.game(&deployment, 1).claim_txid(),
         )],
         std::slice::from_ref(&coin),
         &change(&fixture, 90_000),
@@ -388,12 +388,7 @@ async fn partial_admin_signatures_do_not_count_and_external_broadcast_is_found()
     let coin = fee_coin(&fixture, 0, 0, 100_000);
     let connectors: Vec<_> = (1..=2)
         .map(|i| {
-            block_payouts_tx::ConnectorRef::new(
-                fixture
-                    .game(&service.deployment(), i)
-                    .report()
-                    .new_claim_txid(),
-            )
+            block_payouts_tx::ConnectorRef::new(fixture.game(&service.deployment(), i).claim_txid())
         })
         .collect();
     let mut psbt = block_payouts_tx::build_psbt(

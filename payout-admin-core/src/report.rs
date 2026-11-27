@@ -1,26 +1,22 @@
 //! False claim reports.
 //!
 //! A false claim report proves that a watchtower's ACK was mined against an operator's game, and
-//! names a newer claim by the same operator that the admins should block. Only this one report
+//! names claims by the same operator that the admins should block. Only this one report
 //! type exists. JSON (camelCase):
 //!
 //! ```json
 //! {
 //!   "type": "strata-false-claim-report",
-//!   "version": 1,
+//!   "version": 2,
 //!   "network": "regtest",
 //!   "createdAt": "2026-11-11T12:00:00Z",
-//!   "operatorPubkey": "<x-only hex>",
-//!   "newClaimTxid": "…",
-//!   "newContestTxid": "…",
-//!   "ackedClaimTxid": "…",
-//!   "ackedContestTxid": "…",
-//!   "counterproofAckTxid": "…"
+//!   "counterproofAckTxid": "…",
+//!   "contestTxids": ["…", "…"]
 //! }
 //! ```
 //!
-//! `type`, `version` and `network` are optional and checked when present. `createdAt` is ignored. The
-//! "acked" claim is the earlier claim of the same operator whose game ended in the ACK.
+//! `type` and `network` are optional and checked when present. `createdAt` is ignored. Version 2 is required.
+//! Claims may precede or follow the ACK because fault is per operator.
 //!
 //! # Verification
 //!
@@ -28,23 +24,25 @@
 //!
 //! 1. Every transaction is mined, and the ACK has at least [`ACK_MIN_CONFIRMATIONS`]
 //!    confirmations. Reorganizations deeper than that are not handled.
-//! 2. The acked contest spends the acked claim's claim-contest connector (claim output 0), and the
-//!    new contest spends the new claim's. Each spend goes through a contest leaf
+//! 2. Follow ACK input 1 to the authenticated acked contest. Its single
+//!    input identifies the acked claim. Each listed contest likewise spends its claim's output 0.
+//!    Each spend goes through a contest leaf
 //!    `<N/N> OP_CHECKSIGVERIFY <watchtower> OP_CHECKSIG` whose N/N key is the trusted
 //!    deployment N/N key, and the control block commits that leaf to the claim output. The
 //!    contest therefore carries a valid N/N signature, which authenticates the chain.
 //! 3. The mined watchtower ACK spends the authenticated contest's payout connector, skips its
 //!    proof connector and has version 3, locktime 0, two inputs and one taproot output. In the
 //!    v1 bridge graph these properties identify the ACK. Consensus requires the N/N signature
-//!    to spend the payout connector. The counterproof and the ACK's other input are unchecked.
-//! 4. Both claims pay their CPFP connector (output 3) to the operator's x-only key (a key-path
-//!    only taproot output), which authenticates the operator.
+//!    to spend the payout connector. Input 0 references output 0 of a different transaction.
+//!    The counterproof itself is unchecked.
+//! 4. Each claim's CPFP script (output 3) must equal the acked claim's. The contest's N/N
+//!    signature covers the claim txid and therefore commits to all its outputs.
 //!
 //! On top of that, the new claim's admin payout connector (output 1) must be the connector of the
 //! N/N key its contest revealed. A report whose connector is already spent in a confirmed
 //! transaction is reported as [`ReportVerdict::Spent`] and ignored.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bitcoin::{
     absolute::LockTime,
@@ -56,22 +54,21 @@ use bitcoin::{
     Amount, OutPoint, Script, Transaction, Txid, XOnlyPublicKey,
 };
 use serde::{Deserialize, Serialize};
-use strata_bridge_connectors::{
-    prelude::{ClaimContestConnector, KeyedAnchor},
-    Connector,
+use strata_bridge_connectors::{prelude::ClaimContestConnector, Connector};
+use strata_bridge_tx_graph::transactions::prelude::{
+    ClaimTx, ContestTx, CounterproofAckTx, CounterproofTx,
 };
-use strata_bridge_tx_graph::transactions::prelude::{ClaimTx, ContestTx, CounterproofAckTx};
 
 use crate::deployment::{Covenant, Deployment};
 
 pub const REPORT_TYPE: &str = "strata-false-claim-report";
-pub const REPORT_VERSION: u32 = 1;
+pub const REPORT_VERSION: u32 = 2;
 /// Largest accepted paste, in bytes.
 pub const MAX_PASTE_BYTES: usize = 4_000_000;
 /// Most reports accepted in one paste.
 pub const MAX_REPORTS: usize = 10_000;
 
-/// A false-claim report linking an operator's new claim to an earlier game with a counterproof ACK.
+/// A false-claim report linking an operator’s claims to a game with a counterproof ACK.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct Report {
@@ -83,15 +80,10 @@ pub struct Report {
 struct ReportFields {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     report_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    version: Option<u32>,
+    version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network: Option<String>,
-    operator_pubkey: XOnlyPublicKey,
-    new_claim_txid: Txid,
-    new_contest_txid: Txid,
-    acked_claim_txid: Txid,
-    acked_contest_txid: Txid,
+    contest_txids: Vec<Txid>,
     counterproof_ack_txid: Txid,
 }
 
@@ -101,25 +93,61 @@ impl Report {
         self.fields.counterproof_ack_txid
     }
 
-    /// Identifies the claim the admins are asked to block.
-    pub fn new_claim_txid(&self) -> Txid {
-        self.fields.new_claim_txid
+    /// Contests authenticating the claims to block, in report order.
+    pub fn contest_txids(&self) -> &[Txid] {
+        &self.fields.contest_txids
     }
 
-    /// The transactions verification needs, in report order.
-    pub fn txids(&self) -> [Txid; 5] {
-        [
-            self.fields.new_claim_txid,
-            self.fields.new_contest_txid,
-            self.fields.acked_claim_txid,
-            self.fields.acked_contest_txid,
-            self.fields.counterproof_ack_txid,
-        ]
+    /// Fetch the ACK, contests, and their claims by following prevouts backwards.
+    pub fn fetch_transactions<E>(
+        &self,
+        transactions: &mut HashMap<Txid, MinedTx>,
+        mut fetch: impl FnMut(Txid) -> Result<Option<MinedTx>, E>,
+    ) -> Result<(), E> {
+        fn insert<E>(
+            transactions: &mut HashMap<Txid, MinedTx>,
+            txid: Txid,
+            fetch: &mut impl FnMut(Txid) -> Result<Option<MinedTx>, E>,
+        ) -> Result<(), E> {
+            if let std::collections::hash_map::Entry::Vacant(entry) = transactions.entry(txid) {
+                if let Some(transaction) = fetch(txid)? {
+                    entry.insert(transaction);
+                }
+            }
+
+            Ok(())
+        }
+
+        let ack = self.counterproof_ack_txid();
+        insert(transactions, ack, &mut fetch)?;
+        let mut contests = self.contest_txids().to_vec();
+
+        if let Ok(contest) = mined(transactions, ack, "ack").and_then(|ack| acked_contest(&ack.tx))
+        {
+            contests.push(contest);
+        }
+
+        for contest in contests {
+            insert(transactions, contest, &mut fetch)?;
+
+            if let Ok(outpoint) = claim_outpoint(transactions, contest) {
+                insert(transactions, outpoint.txid, &mut fetch)?;
+            }
+        }
+
+        Ok(())
     }
 
-    /// The admin payout connector this report asks to block.
-    pub fn blocked_outpoint(&self) -> OutPoint {
-        OutPoint::new(self.fields.new_claim_txid, ClaimTx::ADMIN_PAYOUT_VOUT)
+    pub(crate) fn with_contests(&self, contest_txids: Vec<Txid>) -> Self {
+        Self {
+            fields: ReportFields {
+                contest_txids,
+                report_type: self.fields.report_type.clone(),
+                network: self.fields.network.clone(),
+                version: self.fields.version,
+                counterproof_ack_txid: self.counterproof_ack_txid(),
+            },
+        }
     }
 }
 
@@ -152,7 +180,7 @@ impl ParsedPaste {
 pub enum PasteError {
     #[error("the pasted text is too large")]
     TooLarge,
-    #[error("more than {MAX_REPORTS} reports in one paste")]
+    #[error("more than {MAX_REPORTS} reports or claims in one paste")]
     TooMany,
     #[error("nothing to read: paste one or more false claim reports in JSON")]
     Empty,
@@ -183,8 +211,18 @@ pub fn parse_paste(text: &str, network: bitcoin::Network) -> Result<ParsedPaste,
         return Err(PasteError::Empty);
     }
 
+    let mut claim_count = 0;
     let mut parsed = ParsedPaste::default();
     for (position, value) in values.into_iter().enumerate() {
+        claim_count += value
+            .get("contestTxids")
+            .and_then(|claims| claims.as_array())
+            .map_or(0, Vec::len);
+
+        if MAX_REPORTS < claim_count {
+            return Err(PasteError::TooMany);
+        }
+
         match Report::from_value(value, network) {
             Ok(report) => parsed.reports.push(report),
             Err(error) => parsed.malformed.push(MalformedReport { position, error }),
@@ -200,12 +238,13 @@ impl Report {
         value: serde_json::Value,
         network: bitcoin::Network,
     ) -> Result<Report, String> {
-        if let Some(version) = value.get("version").and_then(serde_json::Value::as_u64) {
-            if version != u64::from(REPORT_VERSION) {
-                return Err(format!(
-                    "unsupported report version {version}; this app reads version {REPORT_VERSION}"
-                ));
-            }
+        if value.get("version").and_then(serde_json::Value::as_u64)
+            != Some(u64::from(REPORT_VERSION))
+        {
+            return Err(
+                "Version 2 is required. Version 1 and unversioned reports are no longer accepted."
+                    .into(),
+            );
         }
 
         #[derive(Deserialize)]
@@ -238,8 +277,15 @@ impl Report {
             }
         }
 
-        if fields.new_claim_txid == fields.acked_claim_txid {
-            return Err("the new claim and the acked claim are the same transaction".into());
+        if fields.contest_txids.is_empty() || MAX_REPORTS < fields.contest_txids.len() {
+            return Err(format!("Provide between 1 and {MAX_REPORTS} claims"));
+        }
+
+        let mut seen = HashSet::new();
+        for contest in &fields.contest_txids {
+            if !seen.insert(contest) {
+                return Err(format!("Duplicate contest {contest}"));
+            }
         }
 
         Ok(Self { fields })
@@ -330,6 +376,7 @@ pub struct VerifiedReport {
     report: Report,
     verdict: ReportVerdict,
     new_claim_height: Option<u64>,
+    outpoint: Option<OutPoint>,
 }
 
 impl VerifiedReport {
@@ -343,8 +390,8 @@ impl VerifiedReport {
     }
 
     /// The new claim’s admin payout connector.
-    pub fn new_claim_admin_payout_outpoint(&self) -> OutPoint {
-        self.report.blocked_outpoint()
+    pub fn new_claim_admin_payout_outpoint(&self) -> Option<OutPoint> {
+        self.outpoint
     }
 }
 
@@ -356,7 +403,7 @@ impl Serialize for VerifiedReport {
             report: &'a Report,
             #[serde(flatten)]
             verdict: &'a ReportVerdict,
-            new_claim_admin_payout_outpoint: OutPoint,
+            new_claim_admin_payout_outpoint: Option<OutPoint>,
             new_claim_height: Option<u64>,
         }
 
@@ -481,31 +528,31 @@ fn check_contest_spends_claim<'a>(
         })
 }
 
-fn spends(transaction: &Transaction, outpoint: OutPoint) -> bool {
-    transaction
-        .input
-        .iter()
-        .any(|input| input.previous_output == outpoint)
+fn mined<'a>(
+    transactions: &'a HashMap<Txid, MinedTx>,
+    txid: Txid,
+    name: &str,
+) -> Result<&'a MinedTx, String> {
+    let transaction = transactions.get(&txid).ok_or_else(|| {
+        format!("Your Electrum server does not know the {name} transaction {txid}.")
+    })?;
+
+    if transaction.tx.compute_txid() != txid {
+        return Err(format!(
+            "The Electrum server returned a different transaction for the {name}."
+        ));
+    }
+
+    if transaction.block.is_none() {
+        return Err(format!("The {name} transaction {txid} is not mined yet."));
+    }
+
+    Ok(transaction)
 }
 
-/// Identifies the ACK by its contest outpoints and transaction shape.
-fn check_ack_of_contest(contest: &Transaction, ack: &Transaction) -> Result<(), String> {
-    let contest_txid = contest.compute_txid();
-
-    if !spends(ack, OutPoint::new(contest_txid, ContestTx::PAYOUT_VOUT)) {
-        return Err(
-            "The ack does not spend the acked contest's payout connector, so it is not an ACK."
-                .into(),
-        );
-    }
-
-    if spends(ack, OutPoint::new(contest_txid, ContestTx::PROOF_VOUT)) {
-        return Err(
-            "The ack also spends the acked contest's proof connector, so it is the bridge proof \
-             timeout, not an ACK."
-                .into(),
-        );
-    }
+fn acked_contest(ack: &Transaction) -> Result<Txid, String> {
+    const ACK_COUNTERPROOF_INPUT: usize = 0;
+    const ACK_CONTEST_INPUT: usize = 1;
 
     let shape = ack.version == Version(3)
         && ack.lock_time == LockTime::ZERO
@@ -521,121 +568,105 @@ fn check_ack_of_contest(contest: &Transaction, ack: &Transaction) -> Result<(), 
         );
     }
 
-    Ok(())
+    let counterproof = ack.input[ACK_COUNTERPROOF_INPUT].previous_output;
+    let contest = ack.input[ACK_CONTEST_INPUT].previous_output;
+
+    if contest.vout != ContestTx::PAYOUT_VOUT || counterproof.vout != CounterproofTx::ACK_NACK_VOUT
+    {
+        return Err("The inputs do not spend the required outputs, so this is not an ACK.".into());
+    }
+
+    if counterproof.txid == contest.txid {
+        return Err("Both inputs spend the same contest, as in a bridge proof timeout.".into());
+    }
+
+    Ok(contest.txid)
 }
 
-/// Verifies one report. `transactions` holds whatever the Electrum server returned for [`Report::txids`]
-/// (missing entries mean the Electrum server does not know the transaction). `connector` is the Electrum server's
-/// answer for the blocked outpoint (confirmed spends only), if known.
-pub fn verify_report(
-    deployment: &Deployment,
-    report: &Report,
+/// Resolves the admin payout outpoint from the mined contest's single input.
+pub fn claim_outpoint(
     transactions: &HashMap<Txid, MinedTx>,
-    connector: Option<ConnectorState>,
-) -> VerifiedReport {
-    let mut verified_report = VerifiedReport {
-        key: None,
-        report: report.clone(),
-        verdict: ReportVerdict::Valid,
-        new_claim_height: None,
+    contest: Txid,
+) -> Result<OutPoint, String> {
+    let contest = mined(transactions, contest, "contest")?;
+    let [input] = contest.tx.input.as_slice() else {
+        return Err("The contest must have exactly one input.".into());
     };
 
-    if let Err(reason) = check(deployment, report, transactions, &mut verified_report) {
-        verified_report.verdict = ReportVerdict::Invalid(reason);
-
-        return verified_report;
+    if input.previous_output.vout != ClaimTx::CONTEST_VOUT {
+        return Err("The contest does not spend output 0 of its claim.".into());
     }
 
-    match connector {
-        Some(ConnectorState::SpentConfirmed) => {
-            verified_report.verdict = ReportVerdict::Spent(
-                "The claim's admin payout connector is already spent in a confirmed transaction."
-                    .into(),
-            );
-        }
-        Some(ConnectorState::Unspent) | None => verified_report.verdict = ReportVerdict::Valid,
-    }
-
-    verified_report
+    Ok(OutPoint::new(
+        input.previous_output.txid,
+        ClaimTx::ADMIN_PAYOUT_VOUT,
+    ))
 }
 
-fn check(
+fn check_evidence<'a>(
     deployment: &Deployment,
     report: &Report,
-    transactions: &HashMap<Txid, MinedTx>,
-    verified_report: &mut VerifiedReport,
-) -> Result<(), String> {
-    // 1. Every transaction is mined.
-    let names = [
-        "new claim",
-        "new contest",
-        "acked claim",
-        "acked contest",
-        "ack",
-    ];
-    let mut mined_transactions = Vec::with_capacity(names.len());
-    for (txid, name) in report.txids().iter().zip(names) {
-        let mined_transaction = transactions.get(txid).ok_or_else(|| {
-            format!("Your Electrum server does not know the {name} transaction {txid}.")
-        })?;
-
-        if mined_transaction.tx.compute_txid() != *txid {
-            return Err(format!(
-                "The Electrum server returned a different transaction for the {name}."
-            ));
-        }
-
-        if mined_transaction.block.is_none() {
-            return Err(format!("The {name} transaction {txid} is not mined yet."));
-        }
-
-        mined_transactions.push(mined_transaction);
-    }
-    let [new_claim, new_contest, acked_claim, acked_contest, ack] = [
-        mined_transactions[0],
-        mined_transactions[1],
-        mined_transactions[2],
-        mined_transactions[3],
-        mined_transactions[4],
-    ];
+    transactions: &'a HashMap<Txid, MinedTx>,
+) -> Result<(Txid, &'a Script), String> {
+    let ack = mined(transactions, report.fields.counterproof_ack_txid, "ack")?;
     let confirmations = ack.block.map_or(0, |block| block.confirmations);
 
     if confirmations < ACK_MIN_CONFIRMATIONS {
         return Err(format!(
             "The ack transaction {} has {} of the {ACK_MIN_CONFIRMATIONS} confirmations required. \
              Paste the report again later.",
-            report.txids()[4],
-            confirmations
+            report.fields.counterproof_ack_txid, confirmations
         ));
     }
 
-    verified_report.new_claim_height = new_claim.block.map(|block| block.height);
+    let ack = ack.tx();
+    let contest_txid = acked_contest(ack)?;
+    let contest = mined(transactions, contest_txid, "acked contest")?;
+    let outpoint = claim_outpoint(transactions, contest_txid)?;
+    let claim = mined(transactions, outpoint.txid, "acked claim")?;
+    check_contest_spends_claim(deployment, "acked", &claim.tx, &contest.tx)?;
 
-    // 2. Both contests spend their claim's contest connector through an N/N leaf.
+    let anchor = claim
+        .tx
+        .output
+        .get(ClaimTx::CPFP_VOUT as usize)
+        .ok_or("The acked claim has no CPFP output.")?;
+
+    Ok((outpoint.txid, anchor.script_pubkey.as_script()))
+}
+
+fn check_claim(
+    deployment: &Deployment,
+    acked_claim: (Txid, &Script),
+    outpoint: OutPoint,
+    contest: Txid,
+    transactions: &HashMap<Txid, MinedTx>,
+    verified_report: &mut VerifiedReport,
+) -> Result<(), String> {
+    let new_claim = mined(transactions, outpoint.txid, "new claim")?;
+
+    let (acked_claim_txid, anchor) = acked_claim;
+
+    if outpoint.txid == acked_claim_txid {
+        return Err("The report lists the acked claim as a claim to block.".into());
+    }
+
+    let new_contest = mined(transactions, contest, "new contest")?;
     let new_covenant =
         check_contest_spends_claim(deployment, "new", &new_claim.tx, &new_contest.tx)?;
-    check_contest_spends_claim(deployment, "acked", &acked_claim.tx, &acked_contest.tx)?;
 
-    // 3. The ack is the watchtower ACK of the acked contest.
-    check_ack_of_contest(&acked_contest.tx, &ack.tx)?;
-
-    // 4. Both claims pay the CPFP anchor to the operator key.
-    let anchor = KeyedAnchor::new(
-        deployment.network(),
-        report.fields.operator_pubkey,
-        Amount::ZERO,
-    )
-    .script_pubkey();
-    for (name, claim) in [("new", new_claim), ("acked", acked_claim)] {
-        let output = claim.tx.output.get(ClaimTx::CPFP_VOUT as usize);
-
-        if output.map(|output| &output.script_pubkey) != Some(&anchor) {
-            return Err(format!(
-                "The {name} claim's CPFP output is not locked to operator key {}.",
-                report.fields.operator_pubkey
-            ));
-        }
+    if !new_claim
+        .tx
+        .output
+        .get(ClaimTx::CPFP_VOUT as usize)
+        .is_some_and(|output| output.script_pubkey.as_script() == anchor)
+    {
+        return Err(
+            "The new claim's CPFP script differs from the acked claim's CPFP script.".into(),
+        );
     }
+
+    verified_report.new_claim_height = new_claim.block.map(|block| block.height);
 
     // The connector to spend is the one of the new claim's N/N key.
     let output = new_claim
@@ -676,20 +707,45 @@ pub fn verify_reports(
     let mut positions = HashMap::new();
     let mut results: Vec<VerifiedReport> = Vec::new();
     for report in reports {
-        let outpoint = report.blocked_outpoint();
-        let index = *positions.entry(outpoint).or_insert(results.len());
-        let result = verify_report(
-            deployment,
-            report,
-            transactions,
-            connectors.get(&outpoint).copied(),
-        );
-        match results.get_mut(index) {
-            Some(previous) if matches!(previous.verdict, ReportVerdict::Invalid(_)) => {
-                *previous = result
+        let evidence = check_evidence(deployment, report, transactions);
+        for &contest in report.contest_txids() {
+            let resolved = claim_outpoint(transactions, contest);
+            let outpoint = resolved.as_ref().ok().copied();
+            let index = outpoint.map_or(results.len(), |outpoint| {
+                *positions.entry(outpoint).or_insert(results.len())
+            });
+            let mut result = VerifiedReport {
+                key: None,
+                report: report.with_contests(vec![contest]),
+                verdict: ReportVerdict::Valid,
+                new_claim_height: None,
+                outpoint,
+            };
+            let checked = resolved.and_then(|outpoint| {
+                check_claim(
+                    deployment,
+                    evidence.clone()?,
+                    outpoint,
+                    contest,
+                    transactions,
+                    &mut result,
+                )
+            });
+            result.verdict = match checked {
+                Err(reason) => ReportVerdict::Invalid(reason),
+                Ok(()) if outpoint.and_then(|outpoint| connectors.get(&outpoint)) == Some(&ConnectorState::SpentConfirmed) => {
+                    ReportVerdict::Spent("The claim's admin payout connector is already spent in a confirmed transaction.".into())
+                }
+                Ok(()) => ReportVerdict::Valid,
+            };
+
+            match results.get_mut(index) {
+                Some(previous) if matches!(previous.verdict, ReportVerdict::Invalid(_)) => {
+                    *previous = result
+                }
+                None => results.push(result),
+                _ => {}
             }
-            None => results.push(result),
-            _ => {}
         }
     }
 
@@ -708,6 +764,31 @@ mod tests {
                 other => panic!("expected invalid report, got {other:?}"),
             }
         }
+    }
+
+    fn verify_report(
+        deployment: &Deployment,
+        report: &Report,
+        transactions: &HashMap<Txid, MinedTx>,
+        connector: Option<ConnectorState>,
+    ) -> VerifiedReport {
+        let connectors = connector
+            .into_iter()
+            .filter_map(|state| {
+                Some((
+                    claim_outpoint(transactions, report.contest_txids()[0]).ok()?,
+                    state,
+                ))
+            })
+            .collect();
+
+        verify_reports(
+            deployment,
+            std::slice::from_ref(report),
+            transactions,
+            &connectors,
+        )
+        .remove(0)
     }
 
     fn setup() -> (Fixture, Deployment, GameTxs) {
@@ -731,7 +812,7 @@ mod tests {
         let json = serde_json::to_value(verified_report).unwrap();
         assert_eq!(
             json["newClaimAdminPayoutOutpoint"],
-            game.report().blocked_outpoint().to_string()
+            OutPoint::new(game.claim_txid(), ClaimTx::ADMIN_PAYOUT_VOUT).to_string()
         );
         assert_eq!(json["verdict"], "valid");
         assert_eq!(json["reasons"], serde_json::json!([]));
@@ -752,7 +833,7 @@ mod tests {
     #[test]
     fn an_ack_with_fewer_than_six_confirmations_is_refused() {
         let (_fixture, deployment, game) = setup();
-        let ack = game.report().txids()[4];
+        let ack = game.report().counterproof_ack_txid();
         let verdict = |confirmations| {
             let mut lookup = game.lookup();
             lookup
@@ -779,7 +860,7 @@ mod tests {
     #[test]
     fn every_transaction_must_be_mined() {
         let (_fixture, deployment, game) = setup();
-        for txid in game.report().txids() {
+        for txid in game.lookup().into_keys() {
             let mut lookup = game.lookup();
             lookup.get_mut(&txid).unwrap().block = None;
             let verified_report = verify_report(&deployment, &game.report(), &lookup, None);
@@ -910,33 +991,54 @@ mod tests {
     }
 
     #[test]
-    fn mismatched_chain_links_are_rejected() {
-        let (fixture, deployment, game) = setup();
-        let other = fixture.game(&deployment, 1);
+    fn contests_must_have_one_input_spending_claim_output_zero() {
+        let (_, deployment, game) = setup();
         let mut lookup = game.lookup();
-        lookup.extend(other.lookup());
-        // An ack of a different game.
-        let mut report = game.report();
-        report.fields.counterproof_ack_txid = other.report().fields.counterproof_ack_txid;
-        let verified_report = verify_report(&deployment, &report, &lookup, None);
-        assert!(
-            verified_report
+        let mut contest = lookup[&game.report().contest_txids()[0]].tx.clone();
+        let extra = contest.input[0].clone();
+        contest.input.push(extra);
+
+        for expected in ["exactly one input", "output 0"] {
+            let txid = contest.compute_txid();
+            lookup.insert(
+                txid,
+                MinedTx::new(contest.clone(), Some(MinedBlock::new(10, 6))),
+            );
+            let report = game.report().with_contests(vec![txid]);
+            assert!(verify_report(&deployment, &report, &lookup, None)
                 .invalid_reason()
-                .contains("does not spend the acked contest's payout connector"),
-            "{:?}",
-            verified_report.verdict
-        );
-        // New contest from a different game.
-        let mut report = game.report();
-        report.fields.new_contest_txid = other.report().fields.new_contest_txid;
-        let verified_report = verify_report(&deployment, &report, &lookup, None);
-        assert!(
-            verified_report
-                .invalid_reason()
-                .contains("new contest does not spend"),
-            "{:?}",
-            verified_report.verdict
-        );
+                .contains(expected));
+            contest.input.truncate(1);
+            contest.input[0].previous_output.vout = ClaimTx::ADMIN_PAYOUT_VOUT;
+        }
+    }
+
+    #[test]
+    fn rejects_a_mismatched_transaction_from_electrum() {
+        let (_, deployment, game) = setup();
+        let mut lookup = game.lookup();
+        let wrong = lookup[&game.claim_txid()].clone();
+        lookup.insert(game.report().contest_txids()[0], wrong);
+        assert!(verify_report(&deployment, &game.report(), &lookup, None)
+            .invalid_reason()
+            .contains("different transaction"));
+    }
+
+    #[test]
+    fn rejects_ack_inputs_that_do_not_spend_the_required_outputs_in_order() {
+        let (_, deployment, game) = setup();
+        let assert_rejected = |game: &GameTxs| {
+            let result = verify_report(&deployment, &game.report(), &game.lookup(), None);
+            assert!(result.invalid_reason().contains("required outputs"));
+        };
+
+        let mut reversed = game.clone();
+        reversed.tamper_ack(|ack| ack.input.swap(0, 1));
+        assert_rejected(&reversed);
+
+        let mut wrong_output = game;
+        wrong_output.tamper_ack(|ack| ack.input[0].previous_output.vout = 1);
+        assert_rejected(&wrong_output);
     }
 
     #[test]
@@ -991,30 +1093,27 @@ mod tests {
     fn a_report_of_another_version_is_refused_with_a_clear_message() {
         let (_fixture, deployment, game) = setup();
         let mut other = serde_json::to_value(game.report()).unwrap();
-        other["version"] = serde_json::json!(2);
+        other["version"] = serde_json::json!(1);
         let parsed = parse_paste(&other.to_string(), deployment.network()).unwrap();
         assert!(parsed.reports.is_empty());
         assert!(
-            parsed.malformed[0]
-                .error
-                .contains("unsupported report version 2; this app reads version 1"),
+            parsed.malformed[0].error.contains("Version 2 is required"),
             "{:?}",
             parsed.malformed
         );
-        // The field names of an earlier draft are refused too, with or without a version.
-        let fields = game.report().fields;
-        let mut draft = serde_json::json!({
-            "type": "strata-false-claim-report", "version": 1, "network": "regtest",
-            "operatorPubkey": fields.operator_pubkey,
-            "newClaimTxid": fields.new_claim_txid,
-            "newContestTxid": fields.new_contest_txid,
-            "oldClaimTxid": fields.acked_claim_txid,
-            "oldContestTxid": fields.acked_contest_txid,
-            "oldCounterproofTxid": game.counterproof_txid(),
-            "oldCounterproofAckTxid": fields.counterproof_ack_txid,
-        });
-        let parsed = parse_paste(&draft.to_string(), deployment.network()).unwrap();
-        assert!(parsed.reports.is_empty() && parsed.malformed.len() == 1);
+        for field in [
+            "operatorPubkey",
+            "claims",
+            "ackedClaimTxid",
+            "ackedContestTxid",
+        ] {
+            let mut draft = serde_json::to_value(game.report()).unwrap();
+            draft[field] = true.into();
+            assert!(Report::from_value(draft, deployment.network())
+                .unwrap_err()
+                .contains("unknown field"));
+        }
+        let mut draft = serde_json::to_value(game.report()).unwrap();
         draft.as_object_mut().unwrap().remove("version");
         let parsed = parse_paste(&draft.to_string(), deployment.network()).unwrap();
         assert!(parsed.reports.is_empty() && parsed.malformed.len() == 1);
@@ -1080,10 +1179,55 @@ mod tests {
     }
 
     #[test]
+    fn claims_must_be_distinct_from_each_other_and_the_acked_claim() {
+        let (_, deployment, game) = setup();
+        let original = game.report();
+        let contest = original.contest_txids()[0];
+        for contests in [vec![], vec![contest, contest]] {
+            let mut value = serde_json::to_value(&original).unwrap();
+            value["contestTxids"] = serde_json::json!(contests);
+            assert!(Report::from_value(value, deployment.network()).is_err());
+        }
+        let acked = original.with_contests(vec![game.acked_contest_txid()]);
+        assert!(verify_report(&deployment, &acked, &game.lookup(), None)
+            .invalid_reason()
+            .contains("acked claim"));
+    }
+
+    #[test]
+    fn checks_shared_evidence_then_each_claim_regardless_of_height() {
+        let (fixture, deployment, game) = setup();
+        let spent = fixture.game(&deployment, 1);
+        let unknown = fixture.game(&deployment, 2);
+        let first = game.report().contest_txids()[0];
+        let second = spent.report().contest_txids()[0];
+        let third = unknown.report().contest_txids()[0];
+        let report = game.report().with_contests(vec![first, second, third]);
+        let mut lookup = game.lookup();
+        lookup.extend(spent.lookup());
+        lookup
+            .get_mut(&game.claim_txid())
+            .unwrap()
+            .block
+            .as_mut()
+            .unwrap()
+            .height = 2;
+        let connectors = HashMap::from([(
+            claim_outpoint(&lookup, second).unwrap(),
+            ConnectorState::SpentConfirmed,
+        )]);
+        let checked = verify_reports(&deployment, &[report], &lookup, &connectors);
+        assert_eq!(checked.len(), 3);
+        assert_eq!(checked[0].verdict, ReportVerdict::Valid);
+        assert!(matches!(checked[1].verdict, ReportVerdict::Spent(_)));
+        assert!(checked[2].invalid_reason().contains("does not know"));
+    }
+
+    #[test]
     fn duplicate_reports_merge() {
         let (_fixture, deployment, game) = setup();
         let mut bad = game.report();
-        bad.fields.counterproof_ack_txid = game.report().fields.acked_contest_txid;
+        bad.fields.counterproof_ack_txid = game.acked_contest_txid();
         let result = verify_reports(
             &deployment,
             &[bad, game.report()],
