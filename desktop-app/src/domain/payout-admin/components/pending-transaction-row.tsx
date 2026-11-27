@@ -13,6 +13,7 @@ type Props = {
 	onPasteSignatures: () => void
 	onExport: () => void
 	onCopySignatures: () => void
+	onVerify: () => void
 	onRetry: () => void
 }
 
@@ -47,13 +48,14 @@ export function PendingTransactionRow({
 	onPasteSignatures,
 	onExport,
 	onCopySignatures,
+	onVerify,
 	onRetry,
 }: Props) {
 	const { label: timeLabel, urgent } = formatTimeRemaining(tx.expiresAt)
 	const shared = tx.inputs.some((input) => input.isConflicting)
 
 	return (
-		<div className="border-t border-[#f3f4f6] first:border-t-0">
+		<div className={`border-t border-[#f3f4f6] first:border-t-0 ${tx.verified ? '' : 'bg-danger-surface'}`}>
 			<div className={`${PENDING_COLUMNS} px-5 py-2.5 text-body-sm text-[#0a0a0a]`}>
 				<span className={urgent ? 'font-semibold text-emphasis' : ''} title={tx.expiresAt.toLocaleString()}>
 					{timeLabel}
@@ -73,7 +75,7 @@ export function PendingTransactionRow({
 				</span>
 				<span className="flex items-center justify-end gap-2">
 					{tx.signedByCurrentUser && <span className="whitespace-nowrap font-medium text-[#059669]">Signed ✓</span>}
-					{!tx.signedByCurrentUser && !open && (
+					{tx.verified && !tx.signedByCurrentUser && !open && (
 						<Button size="sm" onClick={onToggle}>
 							Sign
 						</Button>
@@ -83,6 +85,15 @@ export function PendingTransactionRow({
 					</Button>
 				</span>
 			</div>
+
+			{!tx.verified && (
+				<div className="flex items-center justify-between gap-3 px-5 pb-2 text-danger-deep">
+					<span>{tx.reason}</span>
+					<Button size="sm" onClick={onVerify}>
+						Verify with report
+					</Button>
+				</div>
+			)}
 
 			{tx.broadcastError && (
 				<div className="px-5 pb-2">
@@ -123,7 +134,7 @@ export function PendingTransactionRow({
 							Copy PSBT (base64)
 						</Button>
 					</div>
-					{!tx.signedByCurrentUser && <SignBlockPayouts transactionId={tx.id} {...signingProps} />}
+					{tx.verified && !tx.signedByCurrentUser && <SignBlockPayouts transactionId={tx.id} {...signingProps} />}
 				</div>
 			)}
 		</div>

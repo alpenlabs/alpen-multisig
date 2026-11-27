@@ -63,12 +63,17 @@ export function CreateBlockPayouts({ hook }: { hook: PayoutAdminHook }) {
 				</Button>
 				{reports && (
 					<span className="text-body-sm text-[#0a0a0a]">
-						{reports.reports.length + unreadable.length} reports:{' '}
-						<span className="font-semibold text-[#059669]">{valid} valid</span>,{' '}
-						<span className={excluded.length - spent + unreadable.length ? 'font-semibold text-danger-deep' : ''}>
-							{excluded.length - spent + unreadable.length} excluded
+						{reports.reports.length} claims checked. <span className="font-semibold text-[#059669]">{valid} valid</span>
+						,{' '}
+						<span className={excluded.length - spent ? 'font-semibold text-danger-deep' : ''}>
+							{excluded.length - spent} excluded
 						</span>
 						, {spent} already spent (ignored)
+						{0 < unreadable.length && (
+							<span className="font-semibold text-danger-deep">
+								. {unreadable.length} {unreadable.length === 1 ? 'report' : 'reports'} could not be read
+							</span>
+						)}
 					</span>
 				)}
 			</div>
@@ -81,9 +86,11 @@ export function CreateBlockPayouts({ hook }: { hook: PayoutAdminHook }) {
 								Report {report.position} could not be read: {report.error}
 							</li>
 						))}
-						{excluded.map((report) => (
-							<li key={report.newClaimAdminPayoutOutpoint}>
-								<span className="font-mono text-label">{report.newClaimAdminPayoutOutpoint}</span>
+						{excluded.map((report, index) => (
+							<li key={`${report.newClaimAdminPayoutOutpoint}-${index}`}>
+								<span className="font-mono text-label">
+									{report.newClaimAdminPayoutOutpoint ?? `Contest ${report.report.contestTxids[0]}`}
+								</span>
 								<span className="block">
 									{report.verdict === 'spent' ? 'Already spent in a block. ' : ''}
 									{report.reasons.join('; ')}

@@ -4,6 +4,8 @@ import type { PendingBlockPayoutsTx } from './payout-admin.types'
 export function mapPending(tx: api.PayoutOverview['pending'][number], key: string): PendingBlockPayoutsTx {
 	return {
 		id: tx.txid,
+		verified: tx.verified,
+		reason: tx.reason,
 
 		inputs: tx.claimInputs.map((outpoint) => ({
 			outpoint,

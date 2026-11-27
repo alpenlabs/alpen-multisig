@@ -3,6 +3,8 @@ import { mapPending, feeRateTenths } from '../model/payout-mapping'
 
 const pending = {
 	txid: 'tx',
+	verified: false,
+	reason: 'No report',
 	psbt: '',
 	claimInputCount: 2,
 	claimInputs: ['claim:1', 'second:1'],
@@ -14,6 +16,8 @@ const pending = {
 	broadcastError: 'offline',
 }
 const mapped = mapPending(pending, 'admin')
+assert.equal(mapped.verified, false)
+assert.equal(mapped.reason, 'No report')
 assert.equal(mapped.claimInputCount, 2)
 assert.equal(mapped.adminsSigned, 1)
 assert.equal(mapped.signaturesRequired, 2)

@@ -10,6 +10,8 @@ pub(super) struct Record {
     pub(super) txid: String,
     /// Base64-encoded PSBT for the block payouts transaction, including every signature merged so far.
     pub(super) psbt: String,
+    #[serde(skip)]
+    pub(super) report: Option<String>,
     /// Expiry time for the pending record, in seconds since the Unix epoch. The four-day
     /// period starts at upload and restarts when the coordinator first sees an admin signature.
     #[serde(with = "unix_seconds", rename = "expires_at_unix_seconds")]
@@ -88,23 +90,33 @@ pub struct Postgres(pub sqlx::PgPool);
 #[async_trait]
 impl Database for Postgres {
     async fn list(&self) -> Result<Vec<Record>> {
-        let rows: Vec<String> = sqlx::query_scalar("SELECT body FROM payout_admin_records")
-            .fetch_all(&self.0)
-            .await
-            .map_err(internal)?;
+        let rows: Vec<(String, Option<Vec<u8>>)> =
+            sqlx::query_as("SELECT body, report FROM payout_admin_records")
+                .fetch_all(&self.0)
+                .await
+                .map_err(internal)?;
 
-        rows.iter()
-            .map(|body| serde_json::from_str(body).map_err(internal))
+        rows.into_iter()
+            .map(|(body, report)| {
+                let mut record: Record = serde_json::from_str(&body).map_err(internal)?;
+                record.report = report
+                    .map(String::from_utf8)
+                    .transpose()
+                    .map_err(internal)?;
+
+                Ok(record)
+            })
             .collect()
     }
 
     async fn save(&self, record: &Record, expected: Option<i64>) -> Result<bool> {
         let body = serde_json::to_string(record).map_err(internal)?;
+        let report = record.report.as_deref().map(str::as_bytes);
         let result = match expected {
-            None => sqlx::query("INSERT INTO payout_admin_records (txid, version, body) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING")
-                .bind(&record.txid).bind(record.version).bind(body).execute(&self.0).await,
-            Some(version) => sqlx::query("UPDATE payout_admin_records SET version=$2, body=$3 WHERE txid=$1 AND version=$4")
-                .bind(&record.txid).bind(record.version).bind(body).bind(version).execute(&self.0).await,
+            None => sqlx::query("INSERT INTO payout_admin_records (txid, version, body, report) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
+                .bind(&record.txid).bind(record.version).bind(body).bind(report).execute(&self.0).await,
+            Some(version) => sqlx::query("UPDATE payout_admin_records SET version=$2, body=$3, report=$5 WHERE txid=$1 AND version=$4")
+                .bind(&record.txid).bind(record.version).bind(body).bind(version).bind(report).execute(&self.0).await,
         }.map_err(internal)?;
 
         Ok(result.rows_affected() == 1)

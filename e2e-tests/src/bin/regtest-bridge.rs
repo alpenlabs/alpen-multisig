@@ -130,16 +130,12 @@ async fn setup(directory: &Path, fixture: &Fixture) -> Result<()> {
     let mut mature_acks = Vec::new();
 
     for (number, count) in [(2, 3), (3, 20)] {
-        let mut reports = Vec::new();
-
-        for _ in 0..count {
-            let report = game_report(fixture, &deployment, &n_of_n, true).await;
-            mature_acks.push(report.counterproof_ack_txid());
-            reports.push(report);
-        }
+        let report = game_report(fixture, &deployment, &n_of_n, true, count).await;
+        mature_acks.push(report.counterproof_ack_txid());
+        let mut reports = vec![report];
 
         if number == 2 {
-            reports.push(game_report(fixture, &deployment, &n_of_n, false).await);
+            reports.push(game_report(fixture, &deployment, &n_of_n, false, 1).await);
         }
 
         fs::write(
@@ -150,7 +146,7 @@ async fn setup(directory: &Path, fixture: &Fixture) -> Result<()> {
 
     mine(&Node, 4).await;
     // Always last: no more blocks after the young ACK reaches two confirmations.
-    let young = game_report(fixture, &deployment, &n_of_n, true).await;
+    let young = game_report(fixture, &deployment, &n_of_n, true, 1).await;
     fs::write(directory.join("report1.json"), serde_json::to_vec(&young)?)?;
     let mut indexed = false;
     for _ in 0..120 {
@@ -192,21 +188,29 @@ async fn game_report(
     deployment: &Deployment,
     n_of_n: &bitcoin::secp256k1::Keypair,
     broadcast_ack: bool,
+    claim_count: usize,
 ) -> Report {
-    let (old, ack) = if broadcast_ack {
+    let (_, ack) = if broadcast_ack {
         acked_game(&Node, fixture, deployment, n_of_n).await
     } else {
         build_game_with_ack(&WalletFunding(&Node), fixture, deployment, n_of_n).await
     };
-    let new = claim_and_contest(&Node, fixture, deployment, n_of_n).await;
+    let mut contests = Vec::new();
+    for _ in 0..claim_count {
+        let game = claim_and_contest(&Node, fixture, deployment, n_of_n).await;
+        contests.push(game.contest.compute_txid());
+    }
+
     mine(&Node, 1).await;
 
-    Report::from_value(json!({
-        "network": "regtest", "operatorPubkey": fixture.operator_xonly(0),
-        "newClaimTxid": new.claim.compute_txid(), "newContestTxid": new.contest.compute_txid(),
-        "ackedClaimTxid": old.claim.compute_txid(), "ackedContestTxid": old.contest.compute_txid(),
-        "counterproofAckTxid": ack.compute_txid(),
-    }), bitcoin::Network::Regtest).unwrap()
+    Report::from_value(
+        json!({
+            "version": 2, "network": "regtest", "contestTxids": contests,
+            "counterproofAckTxid": ack.compute_txid(),
+        }),
+        bitcoin::Network::Regtest,
+    )
+    .unwrap()
 }
 
 async fn fresh_psbt(directory: &Path, fixture: &Fixture) -> Result<bitcoin::Psbt> {

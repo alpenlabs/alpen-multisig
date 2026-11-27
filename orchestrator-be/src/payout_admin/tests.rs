@@ -54,7 +54,7 @@ fn setup() -> (Fixture, Arc<Service>, Arc<FakeBlockchain>, Psbt) {
     let mut psbt = block_payouts_tx::build_psbt(
         &deployment,
         &[block_payouts_tx::ConnectorRef::new(
-            fixture.game(&deployment, 1).report().new_claim_txid(),
+            fixture.game(&deployment, 1).claim_txid(),
         )],
         std::slice::from_ref(&coin),
         &change(&fixture, 90_000),
@@ -88,7 +88,7 @@ fn signature_text(fixture: &Fixture, service: &Service, psbt: &Psbt, admin: usiz
 async fn lifecycle_signatures_expiry_retry_and_confirmation() {
     let (fixture, service, blockchain, psbt) = setup();
     let time = deadline(SystemTime::now(), Duration::ZERO).unwrap();
-    let pending_view = service.submit(&psbt.to_string(), time).await.unwrap();
+    let pending_view = service.submit(&psbt.to_string(), None, time).await.unwrap();
     assert_eq!(pending_view.admins_signed, 0);
     assert_eq!(pending_view.expires_at, deadline(time, EXPIRY).unwrap());
     let pasted = service
@@ -166,7 +166,7 @@ async fn lifecycle_signatures_expiry_retry_and_confirmation() {
 async fn unsigned_expiry_conflicts_and_finalized_refusal() {
     let (_, service, blockchain, psbt) = setup();
     let time = deadline(SystemTime::now(), Duration::ZERO).unwrap();
-    let pending_view = service.submit(&psbt.to_string(), time).await.unwrap();
+    let pending_view = service.submit(&psbt.to_string(), None, time).await.unwrap();
     let mut conflict = psbt.unsigned_tx.clone();
     conflict.output[0].value = bitcoin::Amount::from_sat(80_000);
     blockchain
@@ -186,12 +186,15 @@ async fn unsigned_expiry_conflicts_and_finalized_refusal() {
         .unwrap();
     assert!(service.get(&pending_view.txid.to_string()).await.is_err());
     blockchain.history.lock().await.clear();
-    service.submit(&psbt.to_string(), time).await.unwrap();
+    service.submit(&psbt.to_string(), None, time).await.unwrap();
     service.tick(deadline(time, EXPIRY).unwrap()).await.unwrap();
     assert!(service.get(&pending_view.txid.to_string()).await.is_err());
     let mut finalized = psbt;
     finalized.inputs[0].final_script_witness = Some(bitcoin::Witness::new());
-    assert!(service.submit(&finalized.to_string(), time).await.is_err());
+    assert!(service
+        .submit(&finalized.to_string(), None, time)
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -199,7 +202,7 @@ async fn shared_claim_is_accepted_and_signatures_merge_concurrently() {
     let (fixture, service, _, psbt) = setup();
     let time = deadline(SystemTime::now(), Duration::ZERO).unwrap();
     let id = service
-        .submit(&psbt.to_string(), time)
+        .submit(&psbt.to_string(), None, time)
         .await
         .unwrap()
         .txid
@@ -208,7 +211,10 @@ async fn shared_claim_is_accepted_and_signatures_merge_concurrently() {
     other.unsigned_tx.output[0].value = bitcoin::Amount::from_sat(80_000);
     // Sharing only the claim is allowed and remains visible.
     other.unsigned_tx.input[1].previous_output.vout += 1;
-    service.submit(&other.to_string(), time).await.unwrap();
+    service
+        .submit(&other.to_string(), None, time)
+        .await
+        .unwrap();
     assert!(service
         .list_pending()
         .await
@@ -235,7 +241,10 @@ async fn shared_fee_coin_is_refused() {
     other.unsigned_tx.output[0].value = bitcoin::Amount::from_sat(80_000);
     let first = psbt.to_string();
     let second = other.to_string();
-    let (first, second) = tokio::join!(service.submit(&first, time), service.submit(&second, time));
+    let (first, second) = tokio::join!(
+        service.submit(&first, None, time),
+        service.submit(&second, None, time)
+    );
 
     assert!(matches!(
         (first, second),
@@ -247,11 +256,15 @@ async fn shared_fee_coin_is_refused() {
 async fn same_transaction_can_be_uploaded_again() {
     let (_, service, _, psbt) = setup();
     let time = SystemTime::now();
-    let first = service.submit(&psbt.to_string(), time).await.unwrap();
-    let again = service.submit(&psbt.to_string(), time).await.unwrap();
+    let first = service
+        .submit(&psbt.to_string(), Some("opaque".into()), time)
+        .await
+        .unwrap();
+    let again = service.submit(&psbt.to_string(), None, time).await.unwrap();
 
     assert_eq!(first.txid, again.txid);
     assert_eq!(again.added, 0);
+    assert_eq!(again.report.as_deref(), Some("opaque"));
 }
 
 async fn request(
@@ -327,6 +340,66 @@ async fn handlers_auth_replay_unauthorized_and_exchange() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert!(pending_view["report"].is_null());
+    let route = REPORT.replace(":txid", pending_view["txid"].as_str().unwrap());
+    let opaque = "é".repeat(MAX_REPORT_BYTES / 2);
+    let oversized = format!("{opaque}a");
+    for (uri, body) in [
+        (&*route, serde_json::json!({"report": oversized})),
+        (
+            PENDING,
+            serde_json::json!({"psbt":psbt.to_string(), "report":oversized}),
+        ),
+    ] {
+        assert_eq!(
+            request(app.clone(), "POST", uri, body, Some(token)).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let attach = serde_json::json!({"report": opaque});
+    assert_eq!(
+        request(app.clone(), "POST", &route, attach.clone(), None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(app.clone(), "POST", &route, attach, Some(token))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            &route,
+            serde_json::json!({"report":"replacement"}),
+            Some(token)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (status, submitted) = request(
+        app.clone(),
+        "POST",
+        PENDING,
+        serde_json::json!({"psbt": psbt.to_string(), "report":"replacement"}),
+        Some(token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(submitted["report"], opaque);
+    let (_, listed) = request(
+        app.clone(),
+        "GET",
+        PENDING,
+        serde_json::Value::Null,
+        Some(token),
+    )
+    .await;
+    assert_eq!(listed[0]["report"], opaque);
     let (status, copy) = request(
         app.clone(),
         "GET",
@@ -388,12 +461,7 @@ async fn partial_admin_signatures_do_not_count_and_external_broadcast_is_found()
     let coin = fee_coin(&fixture, 0, 0, 100_000);
     let connectors: Vec<_> = (1..=2)
         .map(|i| {
-            block_payouts_tx::ConnectorRef::new(
-                fixture
-                    .game(&service.deployment(), i)
-                    .report()
-                    .new_claim_txid(),
-            )
+            block_payouts_tx::ConnectorRef::new(fixture.game(&service.deployment(), i).claim_txid())
         })
         .collect();
     let mut psbt = block_payouts_tx::build_psbt(
@@ -408,7 +476,7 @@ async fn partial_admin_signatures_do_not_count_and_external_broadcast_is_found()
     sign_as(&fixture, &service.deployment(), &mut signed, 0);
     psbt.inputs[0] = signed.inputs[0].clone();
     let pending_view = service
-        .submit(&psbt.to_string(), SystemTime::now())
+        .submit(&psbt.to_string(), None, SystemTime::now())
         .await
         .unwrap();
     assert_eq!(pending_view.claim_input_count, 2);
@@ -435,7 +503,7 @@ async fn partial_admin_signatures_do_not_count_and_external_broadcast_is_found()
 async fn database_rejects_stale_signature_and_expiry_writes() {
     let (_, service, _, psbt) = setup();
     let id = service
-        .submit(&psbt.to_string(), SystemTime::now())
+        .submit(&psbt.to_string(), None, SystemTime::now())
         .await
         .unwrap()
         .txid
@@ -512,7 +580,7 @@ async fn refresh_fetches_shared_connector_history_once() {
     )
     .unwrap();
     service
-        .submit(&psbt.to_string(), SystemTime::now())
+        .submit(&psbt.to_string(), None, SystemTime::now())
         .await
         .unwrap();
     assert_eq!(

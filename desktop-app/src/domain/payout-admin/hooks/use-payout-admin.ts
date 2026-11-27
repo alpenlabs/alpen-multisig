@@ -169,7 +169,7 @@ export function usePayoutAdmin() {
 		toast,
 		error,
 		dismissError: () => setError(null),
-		toSign: pendingTxs.filter((tx) => !tx.signedByCurrentUser).length,
+		toSign: pendingTxs.filter((tx) => tx.verified && !tx.signedByCurrentUser).length,
 		activeModal,
 		hasConflicts: pendingTxs.some((tx) => tx.inputs.some((input) => input.isConflicting)),
 		closeModal,
@@ -223,6 +223,22 @@ export function usePayoutAdmin() {
 			if (!result.ok) throw new Error(result.invalidSignatures.join('\n'))
 
 			setToast('Signature added.')
+		},
+
+		openVerifyModal: (txId: string) => {
+			setError(null)
+			setActiveModal({ kind: 'verify', txId })
+		},
+
+		handleVerify: async (txId: string, text: string): Promise<boolean> => {
+			let verified = false
+			await run(async () => {
+				await unwrap(api.payoutVerifyPendingWithReport(txId, text))
+				await refresh()
+				verified = true
+			}, 'Verifying the report…')
+
+			return verified
 		},
 
 		openPasteModal: (txId: string) => {

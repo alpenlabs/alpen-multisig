@@ -35,32 +35,32 @@ async fn indexed(report: &Report, confirmations: u64) -> HashMap<bitcoin::Txid, 
             .ok()
             .and_then(|response| response["height"].as_u64());
         let mut map = HashMap::new();
-        for id in report.txids() {
-            if let Ok(response) =
-                electrum("blockchain.transaction.get", json!([id.to_string(), true]))
-            {
-                if let (Some(hex), Some(confirmations), Some(tip_height)) = (
-                    response["hex"].as_str(),
-                    response["confirmations"].as_u64(),
-                    height,
-                ) {
-                    if confirmations > 0 && tip_height + 1 >= confirmations {
-                        map.insert(
-                            id,
-                            MinedTx::new(
+        report
+            .fetch_transactions(&mut map, |id| {
+                if let Ok(response) =
+                    electrum("blockchain.transaction.get", json!([id.to_string(), true]))
+                {
+                    if let (Some(hex), Some(confirmations), Some(tip_height)) = (
+                        response["hex"].as_str(),
+                        response["confirmations"].as_u64(),
+                        height,
+                    ) {
+                        if 0 < confirmations && confirmations <= tip_height + 1 {
+                            return Ok::<_, ()>(Some(MinedTx::new(
                                 deserialize_hex(hex).unwrap(),
                                 Some(MinedBlock::new(
                                     tip_height + 1 - confirmations,
                                     confirmations,
                                 )),
-                            ),
-                        );
+                            )));
+                        }
                     }
                 }
-            }
-        }
+                Ok(None)
+            })
+            .unwrap();
 
-        if map.len() == 5
+        if 5 <= map.len()
             && map[&report.counterproof_ack_txid()]
                 .block()
                 .is_some_and(|block| block.confirmations() == confirmations)
@@ -150,27 +150,44 @@ async fn payout_admin_regtest_seed() {
             ));
         }
         let coin = &coins[0];
-        let (old, ack) = acked_game(&node, &fixture, &deployment, &n_of_n).await;
+        let (_, ack) = acked_game(&node, &fixture, &deployment, &n_of_n).await;
         let new = claim_and_contest(&node, &fixture, &deployment, &n_of_n).await;
         mine(&node, 1).await;
-        let report = Report::from_value(json!({
-        "network": "regtest", "operatorPubkey": fixture.operator_xonly(0),
-        "newClaimTxid": new.claim.compute_txid(), "newContestTxid": new.contest.compute_txid(),
-        "ackedClaimTxid": old.claim.compute_txid(), "ackedContestTxid": old.contest.compute_txid(),
-        "counterproofAckTxid": ack.compute_txid(),
-    }), bitcoin::Network::Regtest).unwrap();
-        let young = report::verify_report(&deployment, &report, &indexed(&report, 2).await, None);
+        let report = Report::from_value(
+            json!({
+                "version": 2, "network": "regtest", "contestTxids": [new.contest.compute_txid()],
+                "counterproofAckTxid": ack.compute_txid(),
+            }),
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+        let young = report::verify_reports(
+            &deployment,
+            std::slice::from_ref(&report),
+            &indexed(&report, 2).await,
+            &HashMap::new(),
+        )
+        .remove(0);
         assert!(
             matches!(young.verdict(), ReportVerdict::Invalid(reason) if reason.contains("2 of the 6 confirmations"))
         );
         mine(&node, 4).await;
-        let verified =
-            report::verify_report(&deployment, &report, &indexed(&report, 6).await, None);
+        let verified = report::verify_reports(
+            &deployment,
+            std::slice::from_ref(&report),
+            &indexed(&report, 6).await,
+            &HashMap::new(),
+        )
+        .remove(0);
         assert_eq!(
             verified.verdict(),
             &ReportVerdict::Valid,
             "{:?}",
             verified.verdict()
+        );
+        assert_eq!(
+            verified.new_claim_admin_payout_outpoint().unwrap().txid,
+            new.claim.compute_txid()
         );
         let _server = Coordinator::start(&signers, &asm_url, postgres).await;
         let mut tokens = Vec::new();
@@ -199,7 +216,7 @@ async fn payout_admin_regtest_seed() {
         let mut psbt = block_payouts_tx::build_psbt(
             &deployment,
             &[ConnectorRef::new(
-                verified.new_claim_admin_payout_outpoint().txid,
+                verified.new_claim_admin_payout_outpoint().unwrap().txid,
             )],
             std::slice::from_ref(coin),
             &change(&fixture, 98_000),
@@ -209,7 +226,7 @@ async fn payout_admin_regtest_seed() {
         let competing = block_payouts_tx::build_psbt(
             &deployment,
             &[ConnectorRef::new(
-                verified.new_claim_admin_payout_outpoint().txid,
+                verified.new_claim_admin_payout_outpoint().unwrap().txid,
             )],
             &coins[1..],
             &change(&fixture, 97_000),
@@ -232,7 +249,9 @@ async fn payout_admin_regtest_seed() {
         let first = api(
             wire::PENDING,
             &tokens[0],
-            Some(json!({"psbt":psbt.to_string()})),
+            Some(
+                json!({"psbt":psbt.to_string(), "report":serde_json::to_string(&report).unwrap()}),
+            ),
         )
         .await;
         assert_eq!(first["adminsSigned"], 1);

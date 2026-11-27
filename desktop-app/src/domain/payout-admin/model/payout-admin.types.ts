@@ -2,6 +2,8 @@ export type BlockPayoutsInput = { outpoint: string; isConflicting: boolean }
 
 export type PendingBlockPayoutsTx = {
 	id: string
+	verified: boolean
+	reason: string | null
 	inputs: BlockPayoutsInput[]
 	claimInputCount: number
 	adminsSigned: number
@@ -19,4 +21,4 @@ export type PastBlockPayoutsTx = {
 }
 
 // 'create' replaces the lists with the Block payouts page; the other two are dialogs.
-export type ActiveModal = { kind: 'paste'; txId: string } | { kind: 'create' } | { kind: 'import' } | null
+export type ActiveModal = { kind: 'paste' | 'verify'; txId: string } | { kind: 'create' } | { kind: 'import' } | null

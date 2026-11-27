@@ -11,6 +11,28 @@
 ## Trust boundaries
 
 The configured ASM endpoint is trusted for the N/N key history used to verify false-claim reports.
+Each signer checks a version 2 report against their own Electrum server during review and again before signing.
+The report must cover every claim input exactly. A confirmed ACK establishes fault for one operator under PRD 07,
+so that operator’s claims may precede or follow the ACK.
+We link operators by equal claim output 3 (CPFP) scripts instead of the contest proof output suggested by PRD 07
+because output 3 needs no search over deposit indexes and the contest’s N/N signature covers the claim txid and
+thus all its outputs.
+Transactions are grouped by operator and ACK evidence before size splitting. This can produce more transactions
+than PRD 06’s size-only rule. The operating assumption is that one operator turns faulty at a time.
+
+### Block payouts invariants
+
+- **Signing:** the app asks the Ledger to sign a block payouts transaction only if, in the same signing call, its
+  report covers the transaction’s claim inputs exactly and every claim passes the check against the signer’s own
+  Electrum server. The inputs are checked against the chain at the same time. This holds for the signer’s own
+  transactions and for pending ones.
+- **Verified:** a pending transaction shown as verified has a report that covers its claim inputs exactly (checked
+  on every list load), and every claim passed the Electrum check once this session. It does not promise that the
+  transaction can still confirm; the coordinator removes pending transactions whose inputs are spent in a
+  confirmed transaction.
+- **Stored reports:** the app attaches only reports cut down to exactly the transaction’s claims. The coordinator
+  stores at most one report per transaction, never replaces it, and never verifies it.
+- **Coordinator:** a stored report is only a candidate. No signer treats it as verified before checking it.
 
 ```mermaid
 flowchart LR

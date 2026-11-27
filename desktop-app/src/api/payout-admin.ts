@@ -1,7 +1,7 @@
 /** Binding Tauri command contract (camelCase arguments and responses):
  * payout_admin_identity, payout_admin_show_key, payout_admin_load_deployment,
  * payout_admin_sign_in_review, payout_admin_sign_in, payout_admin_sign_out, payout_admin_overview,
- * payout_admin_review_pending, payout_admin_sign_pending, payout_admin_copy_signatures,
+ * payout_admin_verify_pending_with_report, payout_admin_review_pending, payout_admin_sign_pending, payout_admin_copy_signatures,
  * payout_admin_paste_signatures, payout_admin_import_psbt, payout_admin_export_psbt,
  * payout_admin_retry_broadcast, payout_admin_rebroadcast, payout_admin_verify_reports,
  * payout_admin_bundle, payout_admin_review_transaction, payout_admin_confirm_transaction.
@@ -58,7 +58,9 @@ export type PastPayout = z.infer<typeof pastSchema>
 
 const overviewSchema = z.object({
 	hidden: count,
-	pending: z.array(pendingSchema.extend({ claimInputs: z.array(z.string()) })),
+	pending: z.array(
+		pendingSchema.extend({ claimInputs: z.array(z.string()), verified: z.boolean(), reason: z.string().nullable() }),
+	),
 	past: z.array(pastSchema),
 })
 
@@ -129,7 +131,8 @@ const reportsSchema = z.object({
 	verificationId: z.string(),
 	reports: z.array(
 		z.object({
-			newClaimAdminPayoutOutpoint: z.string(),
+			newClaimAdminPayoutOutpoint: z.string().nullable(),
+			report: z.object({ contestTxids: z.array(z.string()) }),
 			verdict: z.enum(['valid', 'invalid', 'spent']),
 			reasons: z.array(z.string()),
 		}),
@@ -173,6 +176,10 @@ export function payoutSignOut(): Promise<ApiResult<null>> {
 
 export function payoutOverview(): Promise<ApiResult<PayoutOverview>> {
 	return tauriCall('payout_admin_overview', {}, overviewSchema)
+}
+
+export function payoutVerifyPendingWithReport(txid: string, text: string) {
+	return tauriCall('payout_admin_verify_pending_with_report', { txid, text }, z.null())
 }
 
 export function payoutReviewPending(txid: string): Promise<ApiResult<PayoutReview>> {
